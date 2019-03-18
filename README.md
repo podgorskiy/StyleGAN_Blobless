@@ -1,5 +1,6 @@
 # Style GAN
 
+Pytorch implementation of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
 https://arxiv.org/pdf/1812.04948.pdf
 
 https://arxiv.org/pdf/1710.10196.pdf
@@ -22,8 +23,8 @@ pip install -r requirements.txt
 
 To download and prepare dataset:
 ```python
-python download_mnist.py
-python downscale.py
+python prepare_celeba.py
+python downscale_celeba.py
 ```
 
 To train:
