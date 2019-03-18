@@ -1,6 +1,6 @@
 # Style GAN
 
-Pytorch implementation of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
+Unofficial Pytorch implementation of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
 https://arxiv.org/pdf/1812.04948.pdf
 
 https://arxiv.org/pdf/1710.10196.pdf
