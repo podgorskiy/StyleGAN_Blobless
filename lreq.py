@@ -34,7 +34,7 @@ def make_tuple(x, n):
 
 
 class Linear(nn.Module):
-    def __init__(self, in_features, out_features, bias=True, gain=np.sqrt(2.0 / (1 + 0.2 ** 2))):
+    def __init__(self, in_features, out_features, bias=True, gain=np.sqrt(2.0)):
         super(Linear, self).__init__()
         self.in_features = in_features
         self.weight = Parameter(torch.Tensor(out_features, in_features))
@@ -59,7 +59,7 @@ class Linear(nn.Module):
 
 class Conv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
-                 groups=1, bias=True, gain=np.sqrt(2.0 / (1 + 0.2 ** 2)), transpose=False):
+                 groups=1, bias=True, gain=np.sqrt(2.0), transpose=False):
         super(Conv2d, self).__init__()
         if in_channels % groups != 0:
             raise ValueError('in_channels must be divisible by groups')
@@ -76,15 +76,16 @@ class Conv2d(nn.Module):
         self.gain = gain
         self.transpose = transpose
         if transpose:
+            self.fan_in = np.prod(kernel_size) * out_channels // groups
             self.weight = Parameter(torch.Tensor(in_channels, out_channels // groups, *self.kernel_size))
         else:
+            self.fan_in = np.prod(kernel_size) * in_channels // groups
             self.weight = Parameter(torch.Tensor(out_channels, in_channels // groups, *self.kernel_size))
         if bias:
             self.bias = Parameter(torch.Tensor(out_channels))
         else:
             self.register_parameter('bias', None)
         self.std = 0
-        self.fan_in = np.prod(kernel_size) * in_channels
         self.reset_parameters()
 
     def reset_parameters(self):
