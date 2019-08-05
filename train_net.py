@@ -46,7 +46,7 @@ def train_net(rank, world_size, args):
     torch.cuda.set_device(rank)
 
     cfg = get_cfg_defaults()
-    cfg.merge_from_file(os.path.join("configs", "experiment.yaml"))
+    cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 
