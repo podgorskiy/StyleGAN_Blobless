@@ -42,6 +42,33 @@ class Blur(nn.Module):
         return F.conv2d(x, weight=self.weight, groups=self.groups, padding=1)
 
 
+class DiscriminatorBlock(nn.Module):
+    def __init__(self, inputs, outputs, last=False):
+        super(DiscriminatorBlock, self).__init__()
+        self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1)
+        self.blur = Blur(inputs)
+        self.last = last
+        if last:
+            self.dense = ln.Linear(inputs * 4 * 4, outputs)
+        else:
+            self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1)
+
+    def forward(self, x):
+        if self.last:
+            x = minibatch_stddev_layer(x)
+
+        x = self.conv_1(x)
+        x = F.leaky_relu(x, 0.2)
+
+        if self.last:
+            x = self.dense(x.view(x.shape[0], -1))
+        else:
+            x = self.conv_2(self.blur(x))
+        x = F.leaky_relu(x, 0.2)
+
+        return x
+
+
 def style_mod(x, style):
     style = style.view(style.shape[0], 2, x.shape[1], 1, 1)
     return x * (style[:, 0] + 1) + style[:, 1]
@@ -55,42 +82,119 @@ class DecodeBlock(nn.Module):
         if has_first_conv:
             self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 3, 2, 1, output_padding=1)
         self.noise_weight_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-        self.noise_weight_1.data.normal_(0.1, 0.02)
+        self.noise_weight_1.data.zero_()
         self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=True)
         self.style_1 = ln.Linear(latent_size, 2 * outputs)#, gain=1)
         self.conv_2 = ln.Conv2d(outputs, outputs, 3, 1, 1)
         self.noise_weight_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-        self.noise_weight_2.data.normal_(0.1, 0.02)
+        self.noise_weight_2.data.zero_()
         self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=True)
         self.style_2 = ln.Linear(latent_size, 2 * outputs)
         self.blur = Blur(outputs)
 
-    def forward(self, x, styles, noise):
+    def forward(self, x, s1, s2):
         if self.has_first_conv:
             x = self.blur(self.conv_1(x))
-        
-        if noise > 0.0:
-            x = x + self.noise_weight_1 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]) * noise
+
+        x = x + self.noise_weight_1 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
 
         x = F.leaky_relu(x, 0.2)
         x = self.instance_norm_1(x)
-
-        s = styles.pop()
         
-        x = style_mod(x, self.style_1(s))
+        x = style_mod(x, self.style_1(s1))
 
         x = self.conv_2(x)
-        
-        if noise > 0.0:
-            x = x + self.noise_weight_2 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]) * noise
+
+        x = x + self.noise_weight_2 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
 
         x = F.leaky_relu(x, 0.2)
         x = self.instance_norm_2(x)
         
-        s = styles.pop()
-        x = style_mod(x, self.style_2(s))
+        x = style_mod(x, self.style_2(s2))
 
         return x
+
+
+class FromRGB(nn.Module):
+    def __init__(self, channels, outputs):
+        super(FromRGB, self).__init__()
+        self.from_rgb = ln.Conv2d(channels, outputs, 1, 1, 0)
+
+    def forward(self, x):
+        x = self.from_rgb(x)
+        x = F.leaky_relu(x, 0.2)
+     
+        return x
+
+
+class ToRGB(nn.Module):
+    def __init__(self, inputs, channels):
+        super(ToRGB, self).__init__()
+        self.inputs = inputs
+        self.channels = channels
+        self.to_rgb = ln.Conv2d(inputs, channels, 1, 1, 0)#, gain=1)
+
+    def forward(self, x):
+        x = self.to_rgb(x)
+        return x
+
+
+class Discriminator(nn.Module):
+    def __init__(self, startf=32, maxf=256, layer_count=3, channels=3):
+        super(Discriminator, self).__init__()
+        self.maxf = maxf
+        self.startf = startf
+        self.layer_count = layer_count
+        self.from_rgb = nn.ModuleList()
+        self.channels = channels
+
+        mul = 2
+        inputs = startf
+        for i in range(self.layer_count):
+            outputs = min(self.maxf, startf * mul)
+
+            self.from_rgb.append(FromRGB(channels, inputs))
+            block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1)
+
+            print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
+            setattr(self, "encode_block%d" % (i + 1), block)
+            inputs = outputs
+            mul *= 2
+
+        self.fc2 = ln.Linear(inputs, 1, gain=1)
+
+    def encode(self, x, lod):
+        x = self.from_rgb[self.layer_count - lod - 1](x)
+        x = F.leaky_relu(x, 0.2)
+
+        for i in range(self.layer_count - lod - 1, self.layer_count):
+            x = getattr(self, "encode_block%d" % (i + 1))(x)
+
+        return self.fc2(x)
+
+    def encode2(self, x, lod, blend):
+        x_orig = x
+        x = self.from_rgb[self.layer_count - lod - 1](x)
+        x = F.leaky_relu(x, 0.2)
+        x = getattr(self, "encode_block%d" % (self.layer_count - lod - 1 + 1))(x)
+
+        x_prev = F.avg_pool2d(x_orig, 2, 2)
+
+        x_prev = self.from_rgb[self.layer_count - (lod - 1) - 1](x_prev)
+        x_prev = F.leaky_relu(x_prev, 0.2)
+
+        x = x * blend + x_prev * (1.0 - blend)
+
+        for i in range(self.layer_count - (lod - 1) - 1, self.layer_count):
+            x = getattr(self, "encode_block%d" % (i + 1))(x)
+
+        return self.fc2(x)
+
+    def forward(self, x, lod, blend):
+        if blend == 1:
+            return self.encode(x, lod)
+        else:
+            return self.encode2(x, lod, blend)
 
 
 class Generator(nn.Module):
@@ -99,13 +203,17 @@ class Generator(nn.Module):
         self.maxf = maxf
         self.startf = startf
         self.layer_count = layer_count
+
         self.to_rgb = nn.ModuleList()
         self.channels = channels
+        self.latent_size = latent_size
 
         mul = 2**(self.layer_count-1)
 
         self.layer_to_resolution = [0 for _ in range(layer_count)]
         resolution = 2
+
+        self.style_sizes = []
 
         inputs = min(self.maxf, startf * mul)
 
@@ -114,42 +222,52 @@ class Generator(nn.Module):
             if i == 0:
                 const_size = outputs
 
-            block = DecodeBlock(inputs, outputs, latent_size, i != 0)
-            self.to_rgb.append(ln.Conv2d(outputs, channels, 1, 1, 0, gain=1))
+            has_first_conv = i != 0
+            block = DecodeBlock(inputs, outputs, latent_size, has_first_conv)
 
-            print("decode_block%d %s" % ((i + 1), millify(count_parameters(block))))
-            setattr(self, "decode_block%d" % (i + 1), block)
-            inputs = outputs
-            mul //= 2
+            self.style_sizes += [2 * (inputs if has_first_conv else outputs), 2 * outputs]
+
+            self.to_rgb.append(ToRGB(outputs, channels))
 
             resolution *= 2
             self.layer_to_resolution[i] = resolution
+
+            print("decode_block%d %s styles in: %dl out resolution: %d" % ((i + 1), millify(count_parameters(block)), outputs, resolution))
+            setattr(self, "decode_block%d" % (i + 1), block)
+            inputs = outputs
+            mul //= 2
 
         self.const = Parameter(torch.Tensor(1, const_size, 4, 4))
         init.ones_(self.const)
 
     def decode(self, styles, lod, noise):
         x = self.const
-        x = x.repeat(styles[0].shape[0], 1, 1, 1)
+        #x = x.repeat(styles[0].shape[0], 1, 1, 1)
         styles = styles[:]
 
         for i in range(lod + 1):
-            x = getattr(self, "decode_block%d" % (i + 1))(x, styles, noise)
+            s1 = styles.pop(0)
+            s2 = styles.pop(0)
+            x = getattr(self, "decode_block%d" % (i + 1))(x, s1, s2)
 
         x = self.to_rgb[lod](x)
         return x
 
     def decode2(self, styles, lod, blend, noise):
         x = self.const
-        x = x.repeat(styles[0].shape[0], 1, 1, 1)
+        #x = x.repeat(styles[0].shape[0], 1, 1, 1)
         styles = styles[:]
 
         for i in range(lod):
-            x = getattr(self, "decode_block%d" % (i + 1))(x, styles, noise)
+            s1 = styles.pop(0)
+            s2 = styles.pop(0)
+            x = getattr(self, "decode_block%d" % (i + 1))(x, s1, s2)
 
         x_prev = self.to_rgb[lod - 1](x)
 
-        x = getattr(self, "decode_block%d" % (lod + 1))(x, styles, noise)
+        s1 = styles.pop(0)
+        s2 = styles.pop(0)
+        x = getattr(self, "decode_block%d" % (lod + 1))(x, s1, s2)
         x = self.to_rgb[lod](x)
 
         needed_resolution = self.layer_to_resolution[lod]
@@ -210,85 +328,3 @@ class Mapping(nn.Module):
         return list(x.view(x.shape[0], 1, x.shape[1]).repeat(1, self.num_layers, 1).split(1, 1))
 
 
-class DiscriminatorBlock(nn.Module):
-    def __init__(self, inputs, outputs, last=False):
-        super(DiscriminatorBlock, self).__init__()
-        self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1)
-        self.blur = Blur(inputs)
-        self.last = last
-        if last:
-            self.dense = ln.Linear(inputs * 4 * 4, outputs)
-        else:
-            self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1)
-
-    def forward(self, x):
-        if self.last:
-            x = minibatch_stddev_layer(x)
-
-        x = self.conv_1(x)
-        x = F.leaky_relu(x, 0.2)
-
-        if self.last:
-            x = self.dense(x.view(x.shape[0], -1))
-        else:
-            x = self.conv_2(self.blur(x))
-        x = F.leaky_relu(x, 0.2)
-
-        return x
-
-
-class Discriminator(nn.Module):
-    def __init__(self, startf=32, maxf=256, layer_count=3, channels=3):
-        super(Discriminator, self).__init__()
-        self.maxf = maxf
-        self.startf = startf
-        self.layer_count = layer_count
-        self.from_rgb = nn.ModuleList()
-
-        mul = 2
-        inputs = startf
-        for i in range(self.layer_count):
-            outputs = min(self.maxf, startf * mul)
-
-            self.from_rgb.append(ln.Conv2d(channels, inputs, 1, 1, 0))
-            block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1)
-
-            print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
-            setattr(self, "encode_block%d" % (i + 1), block)
-            inputs = outputs
-            mul *= 2
-
-        self.fc2 = ln.Linear(inputs, 1, gain=1)
-
-    def encode(self, x, lod):
-        x = self.from_rgb[self.layer_count - lod - 1](x)
-        x = F.leaky_relu(x, 0.2)
-
-        for i in range(self.layer_count - lod - 1, self.layer_count):
-            x = getattr(self, "encode_block%d" % (i + 1))(x)
-
-        return self.fc2(x)
-
-    def encode2(self, x, lod, blend):
-        x_orig = x
-        x = self.from_rgb[self.layer_count - lod - 1](x)
-        x = F.leaky_relu(x, 0.2)
-        x = getattr(self, "encode_block%d" % (self.layer_count - lod - 1 + 1))(x)
-
-        x_prev = F.interpolate(x_orig, x.shape[-1])
-
-        x_prev = self.from_rgb[self.layer_count - (lod - 1) - 1](x_prev)
-        x_prev = F.leaky_relu(x_prev, 0.2)
-
-        x = x * blend + x_prev * (1.0 - blend)
-
-        for i in range(self.layer_count - (lod - 1) - 1, self.layer_count):
-            x = getattr(self, "encode_block%d" % (i + 1))(x)
-
-        return self.fc2(x)
-
-    def forward(self, x, lod, blend):
-        if blend == 1:
-            return self.encode(x, lod)
-        else:
-            return self.encode2(x, lod, blend)

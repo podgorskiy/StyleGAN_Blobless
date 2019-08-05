@@ -13,223 +13,239 @@
 # limitations under the License.
 # ==============================================================================
 
-from __future__ import print_function
-import torch.utils.data
-from scipy import misc
-from torch import optim
-from torchvision.utils import save_image
-from net import *
-import numpy as np
+import os
 import pickle
 import time
+import math
+import torch.utils.data
+from torch import optim
+from torchvision.utils import save_image
+import utils
+import torch.cuda.comm
+import torch.cuda.nccl
+from tqdm import tqdm
 import random
-import os
-from dlutils import batch_provider
-from dlutils.pytorch.cuda_helper import *
-from dlutils.pytorch import count_parameters
+import threading
+import dlutils.pytorch.count_parameters as count_param_override
+#import apex
+import lod_driver
+from dataloader import PickleDataset, BatchCollator
+from net import *
+from tracker import LossTracker
+import losses
+from checkpointer import Checkpointer
+from scheduler import ComboMultiStepLR
 
-im_size = 128
+from dlutils.batch_provider import batch_provider
+from dlutils.shuffle import shuffle_ndarray
 
-
-def save_model(x, name):
-    if isinstance(x, nn.DataParallel):
-        torch.save(x.module.state_dict(), name)
-    else:
-        torch.save(x.state_dict(), name)
-
-
-def process_batch(batch):
-    data = [x.transpose((2, 0, 1)) for x in batch]
-    x = torch.tensor(np.asarray(data, dtype=np.float32), requires_grad=True).cuda() / 127.5 - 1.
-    return x
-
-lod_2_batch = [256, 128, 128, 64, 32, 16]
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 
 
-def D_logistic_simplegp(d_result_fake, d_result_real, reals, r1_gamma=10.0):
-    loss = (F.softplus(d_result_fake) + F.softplus(-d_result_real)).mean()
+class Model(nn.Module):
+    def __init__(self, startf=32, maxf=256, layer_count=3, latent_size=128, channels=3):
+        super(Model, self).__init__()
+        self.generator = Generator(startf=startf, layer_count=layer_count, maxf=maxf, latent_size=latent_size, channels=3)
+        self.mapping = Mapping(num_layers=2 * layer_count, latent_size=latent_size, dlatent_size=latent_size, mapping_fmaps=latent_size)
+        self.discriminator = Discriminator(startf=startf, layer_count=layer_count, maxf=maxf, channels=3)
+        self.latent_size = latent_size
 
-    if r1_gamma != 0.0:
-        real_loss = d_result_real.sum()
-        real_grads = torch.autograd.grad(real_loss, reals, create_graph=True, retain_graph=True)[0]
-        r1_penalty = torch.sum(real_grads.pow(2.0), dim=[1,2,3])
-        loss = loss + r1_penalty.mean() * (r1_gamma * 0.5)
-    return loss
+    def forward(self, x, lod, blend_factor, d_train):
+        if d_train:
+            z = torch.randn(x.shape[0], self.latent_size)
 
-    
-def G_logistic_nonsaturating(d_result_fake):
-    return F.softplus(-d_result_fake).mean()
+            styles = self.mapping(z)
+            rec = self.generator.forward(styles, lod, blend_factor)
 
-    
-def main(parallel=False):
-    layer_count = 6
-    epochs_per_lod = 10
-    latent_size = 128
+            d_result_real = self.discriminator(x, lod, blend_factor).squeeze()
+            d_result_fake = self.discriminator(rec.detach(), lod, blend_factor).squeeze()
 
-    generator = Generator(layer_count=layer_count, maxf=128, latent_size=latent_size, channels=3)
-    generator.cuda()
-    generator.train()
+            loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
+            return loss_d
+        else:
+            z = torch.randn(x.shape[0], self.latent_size)
 
-    discriminator = Discriminator(layer_count=layer_count, maxf=128, channels=3)
-    discriminator.cuda()
-    discriminator.train()
+            styles = self.mapping(z)
+            rec = self.generator.forward(styles, lod, blend_factor)
 
-    mapping = Mapping(num_layers=2 * layer_count, latent_size=latent_size, dlatent_size=latent_size, mapping_fmaps=latent_size)
-    mapping.cuda()
-    mapping.train()
+            d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()
+            loss_g = losses.generator_logistic_non_saturating(d_result_fake)
+            return loss_g
 
-    print("Trainable parameters autoencoder:")
-    count_parameters(generator)
+    def lerp(self, other, betta):
+        params = list(self.mapping.parameters()) + list(self.generator.parameters())
+        other_param = list(other.mapping.parameters()) + list(other.generator.parameters())
+        for p, p_other in zip(params, other_param):
+            p.data = p.data * betta + p_other.data * (1.0 - betta)
 
-    print("Trainable parameters mapping:")
-    count_parameters(mapping)
 
-    print("Trainable parameters discriminator:")
-    count_parameters(discriminator)
+def save_sample(per_epoch_ptime, epoch, tracker, lod, blend_factor, sample, batches, i, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
+    os.makedirs('results', exist_ok=True)
 
-    if parallel:
-        generator = nn.DataParallel(generator)
-        discriminator = nn.DataParallel(discriminator)
-        generator.layer_to_resolution = generator.module.layer_to_resolution
+    logger.info('\n[%d/%d] - ptime: %.2f, %s, lr: %.12f,  %.12f, max mem: %f",' % (
+        (epoch + 1), cfg.TRAIN.TRAIN_EPOCHS, per_epoch_ptime, str(tracker),
+        discriminator_optimizer.param_groups[0]['lr'],
+        generator_optimizer.param_groups[0]['lr'],
+        torch.cuda.max_memory_allocated() / 1024.0 / 1024.0))
 
-    lr = 0.001
-    lr2 = 0.001
+    with torch.no_grad():
+        model.eval()
+        style = model.mapping(sample)
+        x_rec = model.generator(style, lod, blend_factor)
 
-    vae_optimizer = optim.Adam([
-        {'params': generator.parameters()},
-        {'params': mapping.parameters(), 'lr': lr * 0.01}
-    ], lr=lr, betas=(0.0, 0.99), weight_decay=0)
+        @utils.Async
+        def save_pic(x, x_rec):
+            tracker.register_means(epoch + i / len(batches) / x.shape[0])
+            tracker.plot()
 
-    discriminator_optimizer = optim.Adam(discriminator.parameters(), lr=lr2, betas=(0.0, 0.99), weight_decay=0)
- 
-    train_epoch = 70
+            x_rec = F.interpolate(x_rec, 128)
+            x = F.interpolate(x[:32], 128)
+            resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
+            resultsample = resultsample.cpu()
+            save_image(resultsample,
+                       'results/sample_' + str(epoch) + "_" + str(i // x.shape[0]) + '.jpg', nrow=16)
 
-    sample = torch.randn(32, latent_size).view(-1, latent_size)
+        save_pic(x, x_rec)
 
-    lod = -1
-    in_transition = False
 
-    for epoch in range(train_epoch):
-        generator.train()
-        discriminator.train()
+def train(cfg, local_rank, world_size, distributed, logger):
+    torch.cuda.set_device(local_rank)
+    model = Model(startf=cfg.MODEL.START_CHANNEL_COUNT, layer_count=cfg.MODEL.LAYER_COUNT, maxf=cfg.MODEL.MAX_CHANNEL_COUNT, latent_size=cfg.MODEL.LATENT_SPACE_SIZE, channels=3)
+    model.cuda(local_rank)
+    model.train()
 
-        new_lod = min(layer_count - 1, epoch // epochs_per_lod)
-        if new_lod != lod:
-            lod = new_lod
-            print("#" * 80, "\n# Switching LOD to %d" % lod, "\n" + "#" * 80)
-            print("Start transition")
-            in_transition = True
+    if local_rank == 0:
+        model_s = Model(startf=cfg.MODEL.START_CHANNEL_COUNT, layer_count=cfg.MODEL.LAYER_COUNT, maxf=cfg.MODEL.MAX_CHANNEL_COUNT, latent_size=cfg.MODEL.LATENT_SPACE_SIZE, channels=3)
+        del model_s.discriminator
+        model_s.cuda(local_rank)
+        model_s.eval()
 
-        new_in_transition = (epoch % epochs_per_lod) < (epochs_per_lod // 2) and lod > 0 and epoch // epochs_per_lod == lod
-        if new_in_transition != in_transition:
-            in_transition = new_in_transition
-            print("#" * 80, "\n# Transition ended", "\n" + "#" * 80)
+    if distributed:
+        model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
 
-        with open('data_fold_%d_lod_%d.pkl' % (epoch % 5, lod), 'rb') as pkl:
-            data_train = pickle.load(pkl)
+    count_param_override.print = lambda a: logger.info(a)
 
-        print("Train set size:", len(data_train))
-        data_train = data_train[:4 * (len(data_train) // 4)]
+    logger.info("Trainable parameters generator:")
+    count_parameters(model.module.generator)
 
-        random.shuffle(data_train)
+    logger.info("Trainable parameters discriminator:")
+    count_parameters(model.module.discriminator)
 
-        batches = batch_provider(data_train, lod_2_batch[lod], process_batch, report_progress=True)
+    arguments = dict()
+    arguments["iteration"] = 0
 
-        d_loss = []
-        g_loss = []
+    generator_optimizer = optim.Adam([
+        {'params': model.module.generator.parameters()},
+        {'params': model.module.mapping.parameters(), 'lr': cfg.TRAIN.BASE_LEARNING_RATE * 0.01}
+    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
+
+    discriminator_optimizer = optim.Adam([
+        {'params': model.module.discriminator.parameters()},
+    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
+
+    scheduler = ComboMultiStepLR(optimizers={'generator': generator_optimizer, 'discriminator': discriminator_optimizer},
+                                 milestones=cfg.TRAIN.LEARNING_DECAY_STEPS,
+                                 gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
+                                 reference_batch_size=32)
+
+    model_dict = {'discriminator': model.module.discriminator, 'generator': model.module.generator, 'mapping': model.module.mapping}
+    if local_rank == 0:
+        model_dict['generator_s'] = model_s.generator
+        model_dict['mapping_s'] = model_s.mapping
+
+    checkpointer = Checkpointer(cfg, {'discriminator': model.module.discriminator, 'generator': model.module.generator, 'mapping': model.module.mapping},
+                                {'generator_optimizer': generator_optimizer,
+                                 'discriminator_optimizer': discriminator_optimizer
+                                 }, scheduler=scheduler, logger=logger, save=local_rank == 0)
+
+    extra_checkpoint_data = checkpointer.load()
+
+    arguments.update(extra_checkpoint_data)
+
+    layer_to_resolution = model.module.generator.layer_to_resolution
+
+    bc = BatchCollator()
+
+    dataset = PickleDataset(cfg, logger, rank=local_rank)
+    sample = torch.randn(32, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+
+    lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(dataset) * world_size)
+
+    tracker = LossTracker()
+
+    for epoch in range(scheduler.start_epoch(), cfg.TRAIN.TRAIN_EPOCHS):
+        model.train()
+        lod2batch.set_epoch(epoch, [generator_optimizer, discriminator_optimizer])
+
+        logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d" % (lod2batch.get_batch_size(),
+                                                                lod2batch.get_per_GPU_batch_size(),
+                                                                lod2batch.lod))
+
+        dataset.switch_fold(local_rank, lod2batch.lod)
+        shuffle_ndarray(dataset.data_train)
+
+        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(), worker_count=4, queue_size=8,
+                                 report_progress=True)
+
+        scheduler.set_batch_size(32)
+        scheduler.step()
 
         epoch_start_time = time.time()
 
         i = 0
         for x_orig in batches:
-            if x_orig.shape[0] != lod_2_batch[lod]:
+            if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
                 continue
-            generator.train()
-            discriminator.train()
-            generator.zero_grad()
-            discriminator.zero_grad()
+            x_orig = (x_orig.to(local_rank, non_blocking=True).permute(0, 3, 1, 2) / 127.5 - 1.).clone().detach().requires_grad_(True)
 
-            blend_factor = float((epoch % epochs_per_lod) * len(data_train) + i) / float(epochs_per_lod // 2 * len(data_train))
-            if not in_transition:
-                blend_factor = 1
+            model.train()
 
-            needed_resolution = generator.layer_to_resolution[lod]
+            blend_factor = lod2batch.get_blend_factor(i)
+
+            needed_resolution = layer_to_resolution[lod2batch.lod]
             x = x_orig
 
-            if in_transition:
-                needed_resolution_prev = generator.layer_to_resolution[lod - 1]
-                x_prev = F.interpolate(x_orig, needed_resolution_prev)
+            if lod2batch.in_transition:
+                needed_resolution_prev = layer_to_resolution[lod2batch.lod - 1]
+                x_prev = F.avg_pool2d(x_orig, 2, 2)
                 x_prev_2x = F.interpolate(x_prev, needed_resolution)
                 x = x * blend_factor + x_prev_2x * (1.0 - blend_factor)
 
-            z = torch.randn(lod_2_batch[lod], latent_size).view(-1, latent_size)
-            w = mapping(z)
-
-            rec = generator.forward(w, lod, blend_factor)
-
-            d_result_real = discriminator(x, lod, blend_factor).squeeze()
-            d_result_fake = discriminator(rec.detach(), lod, blend_factor).squeeze()
-                
-            loss_d = D_logistic_simplegp(d_result_fake, d_result_real, x)
-            discriminator.zero_grad()
+            generator_optimizer.zero_grad()
+            discriminator_optimizer.zero_grad()
+            loss_d = model(x, lod2batch.lod, blend_factor, d_train=True)
+            tracker.update(dict(loss_d=loss_d))
             loss_d.backward()
-            d_loss += [loss_d.item()]
-
             discriminator_optimizer.step()
-            
-            ############################################################
-            generator.zero_grad()
 
-            z = torch.randn(lod_2_batch[lod], latent_size).view(-1, latent_size)
-            w = mapping(z)
-
-            rec = generator.forward(w, lod, blend_factor)
-
-            d_result_fake = discriminator(rec, lod, blend_factor).squeeze()
-            loss_g = G_logistic_nonsaturating(d_result_fake)
+            generator_optimizer.zero_grad()
+            discriminator_optimizer.zero_grad()
+            loss_g = model(x, lod2batch.lod, blend_factor, d_train=False)
+            tracker.update(dict(loss_g=loss_g))
             loss_g.backward()
-            g_loss += [loss_g.item()]
+            generator_optimizer.step()
 
-            vae_optimizer.step()
-            #############################################
+            betta = 0.5 ** (lod2batch.get_batch_size() / (10 * 1000.0))
+
+            if local_rank == 0:
+                model_s.lerp(model.module, betta)
 
             epoch_end_time = time.time()
             per_epoch_ptime = epoch_end_time - epoch_start_time
-            
-            def avg(lst): 
-                if len(lst) == 0:
-                    return 0
-                return sum(lst) / len(lst) 
-                
+
             # report losses and save samples each 60 iterations
-            m = 7680 * 2
-            i += lod_2_batch[lod]
-            if i % m == 0:
-                os.makedirs('results', exist_ok=True)
-            
-                g_loss = avg(g_loss)
-                d_loss = avg(d_loss)
-                print('\n[%d/%d] - ptime: %.2f, g loss: %.9f, d loss: %.9f' % (
-                    (epoch + 1), train_epoch, per_epoch_ptime, g_loss, d_loss))
-                g_loss = []
-                d_loss = []
-                with torch.no_grad():
-                    generator.eval()
-                    w = list(mapping(sample))
-                    x_rec = generator(w, lod, blend_factor)
-                    resultsample = torch.cat([x[:32], x_rec]) * 0.5 + 0.5
-                    resultsample = resultsample.cpu()
-                    save_image(resultsample.view(-1, 3, needed_resolution, needed_resolution),
-                               'results/sample_' + str(epoch) + "_" + str(i // lod_2_batch[lod]) + '.png', nrow=16)
+            m = 7680 * 8
+            i += lod2batch.get_batch_size()
+            if local_rank == 0 and i % m == 0:
+                save_sample(per_epoch_ptime, epoch, tracker, lod2batch.lod, blend_factor, sample, batches, i, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
 
-        del batches
-        save_model(generator, "generator_tmp.pkl")
-        save_model(mapping, "mapping_tmp.pkl")
-        save_model(discriminator, "discriminator_tmp.pkl")
-    print("Training finish!... save training results")
-    save_model(generator, "generator.pkl")
-    save_model(mapping, "mapping.pkl")
-    save_model(discriminator, "discriminator.pkl")
+        if local_rank == 0:
+            save_sample(per_epoch_ptime, epoch, tracker, lod2batch.lod, blend_factor, sample, batches, i, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
+            if epoch > 2:
+                checkpointer.save("model_tmp")
 
-if __name__ == '__main__':
-    main(True)
+    logger.info("Training finish!... save training results")
+    if local_rank == 0:
+        checkpointer.save("model_final")
+
