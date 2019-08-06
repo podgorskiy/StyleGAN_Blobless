@@ -14,25 +14,19 @@
 # ==============================================================================
 
 import os
-import pickle
-import time
-import math
 import torch.utils.data
 from torch import optim
 from torchvision.utils import save_image
 import utils
 import torch.cuda.comm
 import torch.cuda.nccl
-from tqdm import tqdm
-import random
-import threading
 import dlutils.pytorch.count_parameters as count_param_override
 #import apex
 import lod_driver
 from dataloader import PickleDataset, BatchCollator
+from model import Model
 from net import *
 from tracker import LossTracker
-import losses
 from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
 
@@ -43,80 +37,56 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
 
 
-class Model(nn.Module):
-    def __init__(self, startf=32, maxf=256, layer_count=3, latent_size=128, channels=3):
-        super(Model, self).__init__()
-        self.generator = Generator(startf=startf, layer_count=layer_count, maxf=maxf, latent_size=latent_size, channels=3)
-        self.mapping = Mapping(num_layers=2 * layer_count, latent_size=latent_size, dlatent_size=latent_size, mapping_fmaps=latent_size)
-        self.discriminator = Discriminator(startf=startf, layer_count=layer_count, maxf=maxf, channels=3)
-        self.latent_size = latent_size
-
-    def forward(self, x, lod, blend_factor, d_train):
-        if d_train:
-            z = torch.randn(x.shape[0], self.latent_size)
-
-            styles = self.mapping(z)
-            rec = self.generator.forward(styles, lod, blend_factor)
-
-            d_result_real = self.discriminator(x, lod, blend_factor).squeeze()
-            d_result_fake = self.discriminator(rec.detach(), lod, blend_factor).squeeze()
-
-            loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
-            return loss_d
-        else:
-            z = torch.randn(x.shape[0], self.latent_size)
-
-            styles = self.mapping(z)
-            rec = self.generator.forward(styles, lod, blend_factor)
-
-            d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()
-            loss_g = losses.generator_logistic_non_saturating(d_result_fake)
-            return loss_g
-
-    def lerp(self, other, betta):
-        params = list(self.mapping.parameters()) + list(self.generator.parameters())
-        other_param = list(other.mapping.parameters()) + list(other.generator.parameters())
-        for p, p_other in zip(params, other_param):
-            p.data = p.data * betta + p_other.data * (1.0 - betta)
-
-
-def save_sample(per_epoch_ptime, epoch, tracker, lod, blend_factor, sample, batches, i, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
+def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
     os.makedirs('results', exist_ok=True)
 
     logger.info('\n[%d/%d] - ptime: %.2f, %s, lr: %.12f,  %.12f, max mem: %f",' % (
-        (epoch + 1), cfg.TRAIN.TRAIN_EPOCHS, per_epoch_ptime, str(tracker),
+        (lod2batch.current_epoch + 1), cfg.TRAIN.TRAIN_EPOCHS, lod2batch.per_epoch_ptime, str(tracker),
         discriminator_optimizer.param_groups[0]['lr'],
         generator_optimizer.param_groups[0]['lr'],
         torch.cuda.max_memory_allocated() / 1024.0 / 1024.0))
 
     with torch.no_grad():
         model.eval()
-        style = model.mapping(sample)
-        x_rec = model.generator(style, lod, blend_factor)
+        x_rec = model.generate(lod2batch.lod, lod2batch.get_blend_factor(), z=sample)
 
         @utils.Async
         def save_pic(x, x_rec):
-            tracker.register_means(epoch + i / len(batches) / x.shape[0])
+            tracker.register_means(lod2batch.current_epoch + lod2batch.iteration * 1.0 / lod2batch.get_dataset_size())
             tracker.plot()
 
             x_rec = F.interpolate(x_rec, 128)
             x = F.interpolate(x[:32], 128)
-            resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
+            #resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
+            resultsample = x_rec * 0.5 + 0.5
             resultsample = resultsample.cpu()
             save_image(resultsample,
-                       'results/sample_' + str(epoch) + "_" + str(i // x.shape[0]) + '.jpg', nrow=16)
+                       'results/sample_' + str(lod2batch.current_epoch + 1) + "_" + str(lod2batch.iteration // 1000) + '.jpg', nrow=16)
 
         save_pic(x, x_rec)
 
 
 def train(cfg, local_rank, world_size, distributed, logger):
     torch.cuda.set_device(local_rank)
-    model = Model(startf=cfg.MODEL.START_CHANNEL_COUNT, layer_count=cfg.MODEL.LAYER_COUNT, maxf=cfg.MODEL.MAX_CHANNEL_COUNT, latent_size=cfg.MODEL.LATENT_SPACE_SIZE, channels=3)
+    model = Model(
+        startf=cfg.MODEL.START_CHANNEL_COUNT,
+        layer_count=cfg.MODEL.LAYER_COUNT,
+        maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
+        latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
+        dlatent_avg_beta=cfg.MODEL.DLATENT_AVG_BETA,
+        style_mixing_prob=cfg.MODEL.STYLE_MIXING_PROB,
+        channels=3)
     model.cuda(local_rank)
     model.train()
 
     if local_rank == 0:
-        model_s = Model(startf=cfg.MODEL.START_CHANNEL_COUNT, layer_count=cfg.MODEL.LAYER_COUNT, maxf=cfg.MODEL.MAX_CHANNEL_COUNT, latent_size=cfg.MODEL.LATENT_SPACE_SIZE, channels=3)
+        model_s = Model(
+            startf=cfg.MODEL.START_CHANNEL_COUNT,
+            layer_count=cfg.MODEL.LAYER_COUNT,
+            maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
+            latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
+            truncation_psi=cfg.MODEL.TRUNCATIOM_PSI,
+            channels=3)
         del model_s.discriminator
         model_s.cuda(local_rank)
         model_s.eval()
@@ -154,18 +124,26 @@ def train(cfg, local_rank, world_size, distributed, logger):
         model_dict['generator_s'] = model_s.generator
         model_dict['mapping_s'] = model_s.mapping
 
-    checkpointer = Checkpointer(cfg, {'discriminator': model.module.discriminator, 'generator': model.module.generator, 'mapping': model.module.mapping},
-                                {'generator_optimizer': generator_optimizer,
-                                 'discriminator_optimizer': discriminator_optimizer
-                                 }, scheduler=scheduler, logger=logger, save=local_rank == 0)
+    checkpointer = Checkpointer(cfg,
+                                {
+                                    'discriminator': model.module.discriminator,
+                                    'generator': model.module.generator,
+                                    'mapping': model.module.mapping,
+                                    'dlatent_avg': model.module.dlatent_avg
+                                },
+                                {
+                                    'generator_optimizer': generator_optimizer,
+                                    'discriminator_optimizer': discriminator_optimizer
+                                },
+                                scheduler=scheduler,
+                                logger=logger,
+                                save=local_rank == 0)
 
     extra_checkpoint_data = checkpointer.load()
 
     arguments.update(extra_checkpoint_data)
 
     layer_to_resolution = model.module.generator.layer_to_resolution
-
-    bc = BatchCollator()
 
     dataset = PickleDataset(cfg, logger, rank=local_rank)
     sample = torch.randn(32, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -185,15 +163,12 @@ def train(cfg, local_rank, world_size, distributed, logger):
         dataset.switch_fold(local_rank, lod2batch.lod)
         shuffle_ndarray(dataset.data_train)
 
-        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(), worker_count=4, queue_size=8,
-                                 report_progress=True)
+        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(), worker_count=4,
+                                 queue_size=8, report_progress=True)
 
         scheduler.set_batch_size(32)
         scheduler.step()
 
-        epoch_start_time = time.time()
-
-        i = 0
         for x_orig in batches:
             if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
                 continue
@@ -201,7 +176,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
             model.train()
 
-            blend_factor = lod2batch.get_blend_factor(i)
+            blend_factor = lod2batch.get_blend_factor()
 
             needed_resolution = layer_to_resolution[lod2batch.lod]
             x = x_orig
@@ -231,17 +206,12 @@ def train(cfg, local_rank, world_size, distributed, logger):
             if local_rank == 0:
                 model_s.lerp(model.module, betta)
 
-            epoch_end_time = time.time()
-            per_epoch_ptime = epoch_end_time - epoch_start_time
-
-            # report losses and save samples each 60 iterations
-            m = 7680 * 8
-            i += lod2batch.get_batch_size()
-            if local_rank == 0 and i % m == 0:
-                save_sample(per_epoch_ptime, epoch, tracker, lod2batch.lod, blend_factor, sample, batches, i, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
+            lod2batch.step()
+            if local_rank == 0 and lod2batch.is_time_to_report():
+                save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
 
         if local_rank == 0:
-            save_sample(per_epoch_ptime, epoch, tracker, lod2batch.lod, blend_factor, sample, batches, i, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
+            save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
             if epoch > 2:
                 checkpointer.save("model_tmp")
 

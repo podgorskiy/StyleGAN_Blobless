@@ -325,6 +325,6 @@ class Mapping(nn.Module):
         for i in range(self.mapping_layers):
             x = getattr(self, "block_%d" % (i + 1))(x)
 
-        return list(x.view(x.shape[0], 1, x.shape[1]).repeat(1, self.num_layers, 1).split(1, 1))
+        return x.view(x.shape[0], 1, x.shape[1]).repeat(1, self.num_layers, 1)
 
 

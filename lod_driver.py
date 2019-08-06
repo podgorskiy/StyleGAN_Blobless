@@ -1,5 +1,6 @@
 import torch
 import math
+import time
 from collections import defaultdict
 
 
@@ -22,6 +23,12 @@ class LODDriver:
         self.lod = -1
         self.in_transition = False
         self.logger = logger
+        self.iteration = 0
+        self.epoch_end_time = 0
+        self.epoch_start_time = 0
+        self.per_epoch_ptime = 0
+        self.snapshots = [120, 100, 80, 60, 40, 30, 20, 20, 20]
+        self.tick_start_nimg = 0
 
     def get_batch_size(self):
         if 0 <= self.lod < len(self.lod_2_batch):
@@ -29,11 +36,14 @@ class LODDriver:
         else:
             return self.minibatch_base
 
+    def get_dataset_size(self):
+        return self.dataset_size
+
     def get_per_GPU_batch_size(self):
         return self.get_batch_size() // self.world_size
 
-    def get_blend_factor(self, iteration):
-        blend_factor = float((self.current_epoch % self.cfg.TRAIN.EPOCHS_PER_LOD) * self.dataset_size + iteration) / float(
+    def get_blend_factor(self):
+        blend_factor = float((self.current_epoch % self.cfg.TRAIN.EPOCHS_PER_LOD) * self.dataset_size + self.iteration) / float(
             self.cfg.TRAIN.EPOCHS_PER_LOD // 2 * self.dataset_size)
         blend_factor = math.sin(blend_factor * math.pi - 0.5 * math.pi) * 0.5 + 0.5
 
@@ -42,8 +52,22 @@ class LODDriver:
 
         return blend_factor
 
+    def is_time_to_report(self):
+        if self.iteration >= self.tick_start_nimg + self.snapshots[self.lod] * 1000:
+            self.tick_start_nimg = self.iteration
+            return True
+        return False
+
+    def step(self):
+        self.iteration += self.get_batch_size()
+        self.epoch_end_time = time.time()
+        self.per_epoch_ptime = self.epoch_end_time - self.epoch_start_time
+
     def set_epoch(self, epoch, optimizers):
         self.current_epoch = epoch
+        self.iteration = 0
+        self.epoch_start_time = time.time()
+
         new_lod = min(self.cfg.MODEL.LAYER_COUNT - 1, epoch // self.cfg.TRAIN.EPOCHS_PER_LOD)
         if new_lod != self.lod:
             self.lod = new_lod

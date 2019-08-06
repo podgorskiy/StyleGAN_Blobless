@@ -15,22 +15,22 @@ def reconstruction(recon_x, x, lod=None):
 
 
 def discriminator_logistic_simple_gp(d_result_fake, d_result_real, reals, r1_gamma=10.0):
-    loss = (F.softplus(d_result_fake) + F.softplus(-d_result_real)).mean()
+    loss = (F.softplus(d_result_fake) + F.softplus(-d_result_real))
 
     if r1_gamma != 0.0:
         real_loss = d_result_real.sum()
         real_grads = torch.autograd.grad(real_loss, reals, create_graph=True, retain_graph=True)[0]
         r1_penalty = torch.sum(real_grads.pow(2.0), dim=[1, 2, 3])
-        loss = loss + r1_penalty.mean() * (r1_gamma * 0.5)
-    return loss
+        loss = loss + r1_penalty * (r1_gamma * 0.5)
+    return loss.mean()
 
 
 def discriminator_gradient_penalty(d_result_real, reals, r1_gamma=10.0):
     real_loss = d_result_real.sum()
     real_grads = torch.autograd.grad(real_loss, reals, create_graph=True, retain_graph=True)[0]
     r1_penalty = torch.sum(real_grads.pow(2.0), dim=[1, 2, 3])
-    loss = r1_penalty.mean() * (r1_gamma * 0.5)
-    return loss
+    loss = r1_penalty * (r1_gamma * 0.5)
+    return loss.mean()
 
 
 def generator_logistic_non_saturating(d_result_fake):

@@ -127,5 +127,6 @@ def main():
         
     save_image(torch.Tensor(canvas), 'reconstruction.png')    
 
+
 if __name__ == '__main__':
     main()

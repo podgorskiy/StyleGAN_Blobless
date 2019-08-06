@@ -19,6 +19,8 @@ import torch
 
 
 def get_model_dict(x):
+    if x is None:
+        return None
     if isinstance(x, nn.DataParallel):
         return x.module.state_dict()
     else:
@@ -78,7 +80,14 @@ class Checkpointer(object):
         self.logger.info("Loading checkpoint from {}".format(f))
         checkpoint = torch.load(f, map_location=torch.device("cpu"))
         for name, model in self.models.items():
-            self.models[name].load_state_dict(checkpoint["models"].pop(name))
+            if name in checkpoint["models"]:
+                model_dict = checkpoint["models"].pop(name)
+                if model_dict is not None:
+                    self.models[name].load_state_dict(model_dict)
+                else:
+                    self.logger.warning("State dict for model \"%s\" is None " % name)
+            else:
+                self.logger.warning("No state dict for model: %s" % name)
         checkpoint.pop('models')
         if "optimizers" in checkpoint and self.optimizer:
             self.logger.info("Loading optimizer from {}".format(f))
