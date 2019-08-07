@@ -119,18 +119,19 @@ def train(cfg, local_rank, world_size, distributed, logger):
                                  gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
                                  reference_batch_size=32)
 
-    model_dict = {'discriminator': model.module.discriminator, 'generator': model.module.generator, 'mapping': model.module.mapping}
+    model_dict = {
+        'discriminator': model.module.discriminator,
+        'generator': model.module.generator,
+        'mapping': model.module.mapping,
+        'dlatent_avg': model.module.dlatent_avg
+    }
+
     if local_rank == 0:
         model_dict['generator_s'] = model_s.generator
         model_dict['mapping_s'] = model_s.mapping
 
     checkpointer = Checkpointer(cfg,
-                                {
-                                    'discriminator': model.module.discriminator,
-                                    'generator': model.module.generator,
-                                    'mapping': model.module.mapping,
-                                    'dlatent_avg': model.module.dlatent_avg
-                                },
+                                model_dict,
                                 {
                                     'generator_optimizer': generator_optimizer,
                                     'discriminator_optimizer': discriminator_optimizer
