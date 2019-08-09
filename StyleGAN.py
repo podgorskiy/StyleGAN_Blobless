@@ -75,6 +75,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
         latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
         dlatent_avg_beta=cfg.MODEL.DLATENT_AVG_BETA,
         style_mixing_prob=cfg.MODEL.STYLE_MIXING_PROB,
+        mapping_layers=cfg.MODEL.MAPPING_LAYERS,
         channels=3)
     model.cuda(local_rank)
     model.train()
@@ -86,6 +87,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
             maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
             latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
             truncation_psi=cfg.MODEL.TRUNCATIOM_PSI,
+            mapping_layers=cfg.MODEL.MAPPING_LAYERS,
             channels=3)
         del model_s.discriminator
         model_s.cuda(local_rank)

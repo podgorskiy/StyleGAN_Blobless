@@ -64,7 +64,7 @@ class Checkpointer(object):
         torch.save(data, save_file)
         self.tag_last_checkpoint(save_file)
 
-    def load(self, ignore_last_checkpoint=False):
+    def load(self, ignore_last_checkpoint=False, file_name=None):
         save_file = os.path.join(self.cfg.OUTPUT_DIR, "last_checkpoint")
         try:
             with open(save_file, "r") as last_checkpoint:
@@ -76,6 +76,8 @@ class Checkpointer(object):
         if ignore_last_checkpoint:
             self.logger.info("Forced to Initialize model from scratch")
             return {}
+        if file_name is not None:
+            f = file_name
 
         self.logger.info("Loading checkpoint from {}".format(f))
         checkpoint = torch.load(f, map_location=torch.device("cpu"))
@@ -83,7 +85,7 @@ class Checkpointer(object):
             if name in checkpoint["models"]:
                 model_dict = checkpoint["models"].pop(name)
                 if model_dict is not None:
-                    self.models[name].load_state_dict(model_dict)
+                    self.models[name].load_state_dict(model_dict, strict=False)
                 else:
                     self.logger.warning("State dict for model \"%s\" is None " % name)
             else:

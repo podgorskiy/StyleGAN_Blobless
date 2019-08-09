@@ -13,10 +13,10 @@ class DLatent(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, startf=32, maxf=256, layer_count=3, latent_size=128, dlatent_avg_beta=None, truncation_psi=None, style_mixing_prob=None, channels=3):
+    def __init__(self, startf=32, maxf=256, layer_count=3, latent_size=128, mapping_layers=5, dlatent_avg_beta=None, truncation_psi=None, style_mixing_prob=None, channels=3):
         super(Model, self).__init__()
         self.generator = Generator(startf=startf, layer_count=layer_count, maxf=maxf, latent_size=latent_size, channels=channels)
-        self.mapping = Mapping(num_layers=2 * layer_count, latent_size=latent_size, dlatent_size=latent_size, mapping_fmaps=latent_size)
+        self.mapping = Mapping(num_layers=2 * layer_count, latent_size=latent_size, dlatent_size=latent_size, mapping_fmaps=latent_size, mapping_layers=mapping_layers)
         self.discriminator = Discriminator(startf=startf, layer_count=layer_count, maxf=maxf, channels=channels)
         self.dlatent_avg = DLatent(latent_size, self.mapping.num_layers)
         self.latent_size = latent_size
@@ -47,7 +47,6 @@ class Model(nn.Module):
         if self.truncation_psi is not None:
             styles = styles * self.truncation_psi + self.dlatent_avg.buff.detach() * (1.0 - self.truncation_psi)
 
-        styles = list(styles.split(1, 1))
         rec = self.generator.forward(styles, lod, blend_factor)
         return rec
 

@@ -27,7 +27,7 @@ class LODDriver:
         self.epoch_end_time = 0
         self.epoch_start_time = 0
         self.per_epoch_ptime = 0
-        self.snapshots = [120, 100, 80, 60, 40, 30, 20, 20, 20]
+        self.snapshots = [60, 80, 60, 30, 20, 10, 20, 20, 20]
         self.tick_start_nimg = 0
 
     def get_batch_size(self):
@@ -66,6 +66,7 @@ class LODDriver:
     def set_epoch(self, epoch, optimizers):
         self.current_epoch = epoch
         self.iteration = 0
+        self.tick_start_nimg = 0
         self.epoch_start_time = time.time()
 
         new_lod = min(self.cfg.MODEL.LAYER_COUNT - 1, epoch // self.cfg.TRAIN.EPOCHS_PER_LOD)
