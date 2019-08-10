@@ -56,7 +56,7 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
             tracker.plot()
 
             x_rec = F.interpolate(x_rec, 128)
-            x = F.interpolate(x[:32], 128)
+            #x = F.interpolate(x[:32], 128)
             #resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
             resultsample = x_rec * 0.5 + 0.5
             resultsample = resultsample.cpu()

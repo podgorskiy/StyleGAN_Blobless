@@ -74,31 +74,53 @@ def style_mod(x, style):
     return x * (style[:, 0] + 1) + style[:, 1]
 
 
+def upscale2d(x, factor=2):
+    s = x.shape
+    x = torch.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
+    x = x.repeat(1, 1, 1, factor, 1, factor)
+    x = torch.reshape(x, [-1, s[1], s[2] * factor, s[3] * factor])
+    return x
+
+
 class DecodeBlock(nn.Module):
-    def __init__(self, inputs, outputs, latent_size, has_first_conv=True):
+    def __init__(self, inputs, outputs, latent_size, has_first_conv=True, fused_scale=True):
         super(DecodeBlock, self).__init__()
         self.has_first_conv = has_first_conv
         self.inputs = inputs
+        self.has_first_conv = has_first_conv
+        self.fused_scale = fused_scale
         if has_first_conv:
-            self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 3, 2, 1, output_padding=1)
+            if fused_scale:
+                self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 4, 2, 1, bias=False)
+            else:
+                self.conv_1 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
+
+        self.bias_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
+        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_1.data.zero_()
-        self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=True)
-        self.conv_2 = ln.Conv2d(outputs, outputs, 3, 1, 1)
+        self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
+        self.conv_2 = ln.Conv2d(outputs, outputs, 3, 1, 1, bias=False)
         self.noise_weight_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_2.data.zero_()
-        self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=True)
+        self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
         self.style_1 = ln.Linear(latent_size, 2 * outputs, gain=1)
         self.style_2 = ln.Linear(latent_size, 2 * outputs, gain=1)
         self.blur = Blur(outputs)
 
     def forward(self, x, s1, s2):
         if self.has_first_conv:
-            x = self.blur(self.conv_1(x))
+            if not self.fused_scale:
+                x = upscale2d(x)
+            x = self.conv_1(x)
+            x = self.blur(x)
 
         x = x + self.noise_weight_1 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
 
+        x = x + self.bias_1
+
         x = F.leaky_relu(x, 0.2)
+
         x = self.instance_norm_1(x)
         
         x = style_mod(x, self.style_1(s1))
@@ -106,6 +128,8 @@ class DecodeBlock(nn.Module):
         x = self.conv_2(x)
 
         x = x + self.noise_weight_2 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
+
+        x = x + self.bias_2
 
         x = F.leaky_relu(x, 0.2)
         x = self.instance_norm_2(x)
@@ -225,14 +249,16 @@ class Generator(nn.Module):
                 const_size = outputs
 
             has_first_conv = i != 0
-            block = DecodeBlock(inputs, outputs, latent_size, has_first_conv)
+            fused_scale = resolution * 2 >= 128
+
+            block = DecodeBlock(inputs, outputs, latent_size, has_first_conv, fused_scale=fused_scale)
+
+            resolution *= 2
+            self.layer_to_resolution[i] = resolution
 
             self.style_sizes += [2 * (inputs if has_first_conv else outputs), 2 * outputs]
 
             self.to_rgb.append(ToRGB(outputs, channels))
-
-            resolution *= 2
-            self.layer_to_resolution[i] = resolution
 
             print("decode_block%d %s styles in: %dl out resolution: %d" % ((i + 1), millify(count_parameters(block)), outputs, resolution))
             self.decode_block.append(block)
@@ -289,9 +315,9 @@ def minibatch_stddev_layer(x, group_size=4):
 
 
 class MappingBlock(nn.Module):
-    def __init__(self, inputs, output):
+    def __init__(self, inputs, output, lrmul):
         super(MappingBlock, self).__init__()
-        self.fc = nn.Linear(inputs, output)
+        self.fc = ln.Linear(inputs, output, lrmul=lrmul)
 
     def forward(self, x):
         x = F.leaky_relu(self.fc(x), 0.2)
@@ -306,7 +332,7 @@ class Mapping(nn.Module):
         self.num_layers = num_layers
         for i in range(mapping_layers):
             outputs = dlatent_size if i == mapping_layers - 1 else mapping_fmaps
-            block = MappingBlock(inputs, outputs)
+            block = MappingBlock(inputs, outputs, lrmul=0.01)
             inputs = outputs
             setattr(self, "block_%d" % (i + 1), block)
             print("dense %d %s" % ((i + 1), millify(count_parameters(block))))

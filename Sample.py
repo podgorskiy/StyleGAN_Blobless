@@ -73,11 +73,12 @@ def save_sample(model, sample, i):
 
 def sample(cfg, logger):
     model = Model(
-        startf=cfg.MODEL.START_CHANNEL_COUNT // 8,
-        layer_count= cfg.MODEL.LAYER_COUNT + 3,
+        startf=cfg.MODEL.START_CHANNEL_COUNT,
+        layer_count= cfg.MODEL.LAYER_COUNT,
         maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
         latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
         truncation_psi=0.7, #cfg.MODEL.TRUNCATIOM_PSI,
+        mapping_layers=cfg.MODEL.MAPPING_LAYERS,
         channels=3)
     del model.discriminator
     model.eval()
@@ -97,7 +98,7 @@ def sample(cfg, logger):
         model_dict = {
             'generator_s': model.generator,
             'mapping_s': model.mapping,
-            #'dlatent_avg': model.dlatent_avg,
+            'dlatent_avg': model.dlatent_avg,
         }
 
     checkpointer = Checkpointer(cfg,
@@ -105,21 +106,23 @@ def sample(cfg, logger):
                                 logger=logger,
                                 save=True)
 
-    file_name = 'model_final_small'
+    file_name = 'karras2019stylegan-ffhq'
 
-    # checkpointer.load(file_name=file_name + '.pth')
+    checkpointer.load(file_name=file_name + '.pth')
     # checkpointer.save(file_name + '_stripped')
 
-    sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+    sample_b = torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
 
-    for i in range(500):
-        if i % 20 == 0:
-            sample_a = sample_b
-            sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
-        x = (i % 20) / 20.0
-        sample = sample_a * (1.0 - x) + sample_b * x
-        save_sample(model, sample, i)
+    # for i in range(500):
+    #     if i % 20 == 0:
+    #         sample_a = sample_b
+    #         sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+    #     x = (i % 20) / 20.0
+    #     sample = sample_a * (1.0 - x) + sample_b * x
+    #     save_sample(model, sample, i)
 
+    sample = torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+    save_sample(model, sample, 0)
     exit()
 
     im_count = 16
@@ -157,7 +160,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment_small.yaml",
+        default="configs/experiment_stylegan.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
