@@ -91,7 +91,7 @@ class DecodeBlock(nn.Module):
         self.fused_scale = fused_scale
         if has_first_conv:
             if fused_scale:
-                self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 4, 2, 1, bias=False)
+                self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 3, 2, 1, bias=False)
             else:
                 self.conv_1 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
 

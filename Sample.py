@@ -111,9 +111,9 @@ def sample(cfg, logger):
     checkpointer.load(file_name=file_name + '.pth')
     # checkpointer.save(file_name + '_stripped')
 
-    sample_b = torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+    #sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
 
-    # for i in range(500):
+    # for i in range(100):
     #     if i % 20 == 0:
     #         sample_a = sample_b
     #         sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -121,7 +121,9 @@ def sample(cfg, logger):
     #     sample = sample_a * (1.0 - x) + sample_b * x
     #     save_sample(model, sample, i)
 
-    sample = torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+    rnd = np.random.RandomState(5)
+    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
+    sample = torch.tensor(latents).float().cuda()  # torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
     save_sample(model, sample, 0)
     exit()
 

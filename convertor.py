@@ -58,7 +58,7 @@ def load_from(name, cfg):
 
     Gs = m[2]
 
-    #Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
+    Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
 
     #Gs_.copy_vars_from(Gs)
 
@@ -71,56 +71,52 @@ def load_from(name, cfg):
         truncation_psi=0.7, #cfg.MODEL.TRUNCATIOM_PSI,
         channels=3)
 
+    def tensor(x, transpose=None):
+        x = Gs.vars[x].eval()
+        if transpose:
+            x = np.transpose(x, transpose)
+        return torch.tensor(x)
+
     for i in range(cfg.MODEL.MAPPING_LAYERS):
-        weight = Gs.trainables['G_mapping/Dense%d/weight' % i]
-        bias = Gs.trainables['G_mapping/Dense%d/bias' % i]
-
         block = getattr(model.mapping, "block_%d" % (i + 1))
+        block.fc.weight[:] = tensor('G_mapping/Dense%d/weight' % i, (1, 0))
+        block.fc.bias[:] = tensor('G_mapping/Dense%d/bias' % i)
 
-        block.fc.weight[:] = torch.tensor(np.transpose(weight.eval(), (1, 0)))
-        block.fc.bias[:] = torch.tensor(bias.eval())
+    model.dlatent_avg.buff[:] = tensor('dlatent_avg')
+    model.generator.const[:] = tensor('G_synthesis/4x4/Const/const')
 
-    model.dlatent_avg.buff[:] = torch.tensor(Gs.vars['dlatent_avg'].eval())
+    for i in range(model.generator.layer_count):
+        name = '%dx%d' % (2 ** (2 + i), 2 ** (2 + i))
+        block = model.generator.decode_block[i]
 
-    model.generator.const[:] = torch.tensor(Gs.trainables['G_synthesis/4x4/Const/const'].eval())
+        prefix = 'G_synthesis/%s' % name
 
-    model.generator.decode_block[0].noise_weight_1[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/4x4/Const/Noise/weight'].eval())
-    model.generator.decode_block[0].noise_weight_2[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/4x4/Conv/Noise/weight'].eval())
-    model.generator.decode_block[0].conv_2.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/4x4/Conv/weight'].eval(), (3, 2, 0, 1)))
-    model.generator.decode_block[0].bias_1[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/4x4/Const/bias'].eval())
-    model.generator.decode_block[0].bias_2[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/4x4/Conv/bias'].eval())
-    model.generator.decode_block[0].style_1.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/4x4/Const/StyleMod/weight'].eval(), (1, 0)))
-    model.generator.decode_block[0].style_1.bias[:] = torch.tensor(Gs.trainables['G_synthesis/4x4/Const/StyleMod/bias'].eval())
-    model.generator.decode_block[0].style_2.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/4x4/Conv/StyleMod/weight'].eval(), (1, 0)))
-    model.generator.decode_block[0].style_2.bias[:] = torch.tensor(Gs.trainables['G_synthesis/4x4/Conv/StyleMod/bias'].eval())
-    model.generator.to_rgb[0].to_rgb.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/ToRGB_lod8/weight'].eval(), (3, 2, 0, 1)))
-    model.generator.to_rgb[0].to_rgb.bias[:] = torch.tensor(Gs.trainables['G_synthesis/ToRGB_lod8/bias'].eval())
-
-    for i in range(1, model.generator.layer_count):
-        name = '%dx%d' % (2**(2+i), 2**(2+i))
-        model.generator.decode_block[i].noise_weight_1[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv0_up/Noise/weight' % name].eval())
-        model.generator.decode_block[i].noise_weight_2[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv1/Noise/weight' % name].eval())
-
-        if model.generator.decode_block[i].fused_scale:
-            w = Gs.trainables['G_synthesis/%s/Conv0_up/weight' % name].eval()
-            w = np.transpose(w, (0, 1, 3, 2))
-            w = np.pad(w, [[1, 1], [1, 1], [0, 0], [0, 0]], mode='constant')
-            w = w[1:, 1:] + w[:-1, 1:] + w[1:, :-1] + w[:-1, :-1]
-
-            model.generator.decode_block[i].conv_1.weight[:] = torch.tensor(np.transpose(w, (3, 2, 0, 1)))
+        if not block.has_first_conv:
+            prefix_1 = '%s/Const' % prefix
+            prefix_2 = '%s/Conv' % prefix
         else:
-            model.generator.decode_block[i].conv_1.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/%s/Conv0_up/weight' % name].eval(), (3, 2, 0, 1)))
+            prefix_1 = '%s/Conv0_up' % prefix
+            prefix_2 = '%s/Conv1' % prefix
 
-        model.generator.decode_block[i].conv_2.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/%s/Conv1/weight' % name].eval(), (3, 2, 0, 1)))
-        model.generator.decode_block[i].bias_1[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv0_up/bias' % name].eval())
-        model.generator.decode_block[i].bias_2[0, :, 0, 0] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv1/bias' % name].eval())
-        model.generator.decode_block[i].style_1.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/%s/Conv0_up/StyleMod/weight' % name].eval(), (1, 0)))
-        model.generator.decode_block[i].style_1.bias[:] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv0_up/StyleMod/bias' % name].eval())
-        model.generator.decode_block[i].style_2.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/%s/Conv1/StyleMod/weight' % name].eval(), (1, 0)))
-        model.generator.decode_block[i].style_2.bias[:] = torch.tensor(Gs.trainables['G_synthesis/%s/Conv1/StyleMod/bias' % name].eval())
+        block.noise_weight_1[0, :, 0, 0] = tensor('%s/Noise/weight' % prefix_1)
+        block.noise_weight_2[0, :, 0, 0] = tensor('%s/Noise/weight' % prefix_2)
 
-        model.generator.to_rgb[i].to_rgb.weight[:] = torch.tensor(np.transpose(Gs.trainables['G_synthesis/ToRGB_lod%d/weight' % (8-i)].eval(), (3, 2, 0, 1)))
-        model.generator.to_rgb[i].to_rgb.bias[:] = torch.tensor(Gs.trainables['G_synthesis/ToRGB_lod%d/bias' % (8-i)].eval())
+        if block.has_first_conv:
+            if block.fused_scale:
+                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (2, 3, 0, 1))
+            else:
+                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (3, 2, 0, 1))
+
+        block.conv_2.weight[:] = tensor('%s/weight' % prefix_2, (3, 2, 0, 1))
+        block.bias_1[0, :, 0, 0] = tensor('%s/bias' % prefix_1)
+        block.bias_2[0, :, 0, 0] = tensor('%s/bias' % prefix_2)
+        block.style_1.weight[:] = tensor('%s/StyleMod/weight' % prefix_1, (1, 0))
+        block.style_1.bias[:] = tensor('%s/StyleMod/bias' % prefix_1)
+        block.style_2.weight[:] = tensor('%s/StyleMod/weight' % prefix_2, (1, 0))
+        block.style_2.bias[:] = tensor('%s/StyleMod/bias' % prefix_2)
+
+        model.generator.to_rgb[i].to_rgb.weight[:] = tensor('G_synthesis/ToRGB_lod%d/weight' % (8-i), (3, 2, 0, 1))
+        model.generator.to_rgb[i].to_rgb.bias[:] = tensor('G_synthesis/ToRGB_lod%d/bias' % (8-i))
     return model #, Gs_
 
 
@@ -154,8 +150,6 @@ def train_net(args):
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    sample = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
-
     model = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
     #model, Gs = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
 
@@ -163,6 +157,9 @@ def train_net(args):
     #fmt = dict(func=tflib.convert_images_to_uint8, nchw_to_nhwc=True)
     #images = Gs.run(sample.cpu().detach().numpy(), None, truncation_psi=0.7, randomize_noise=True, output_transform=None)
 
+    rnd = np.random.RandomState(5)
+    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
+    sample = torch.tensor(latents).float().cuda()
     save_sample(model, sample, )
 
     #png_filename = os.path.join('example.png')
@@ -180,7 +177,7 @@ def train_net(args):
                                 logger=logger,
                                 save=True)
 
-    checkpointer.save('karras2019stylegan-ffhq')
+    #checkpointer.save('karras2019stylegan-ffhq')
 
 
 def run():

@@ -76,11 +76,10 @@ class Conv2d(nn.Module):
         self.groups = groups
         self.gain = gain
         self.transpose = transpose
+        self.fan_in = np.prod(self.kernel_size) * in_channels // groups
         if transpose:
-            self.fan_in = np.prod(self.kernel_size) * out_channels // groups
             self.weight = Parameter(torch.Tensor(in_channels, out_channels // groups, *self.kernel_size))
         else:
-            self.fan_in = np.prod(self.kernel_size) * in_channels // groups
             self.weight = Parameter(torch.Tensor(out_channels, in_channels // groups, *self.kernel_size))
         if bias:
             self.bias = Parameter(torch.Tensor(out_channels))
@@ -91,14 +90,16 @@ class Conv2d(nn.Module):
 
     def reset_parameters(self):
         self.std = self.gain / np.sqrt(self.fan_in)
-        init.normal_(self.weight)#, std=self.std)
+        init.normal_(self.weight)  # , std=self.std)
         if self.bias is not None:
             with torch.no_grad():
                 self.bias.zero_()
 
     def forward(self, x):
         if self.transpose:
-            return F.conv_transpose2d(x, self.weight * self.std, self.bias, stride=self.stride, padding=self.padding,
+            w = F.pad(self.weight, (1, 1, 1, 1), mode='constant')
+            w = w[:, :, 1:, 1:] + w[:, :, :-1, 1:] + w[:, :, 1:, :-1] + w[:, :, :-1, :-1]
+            return F.conv_transpose2d(x, w * self.std, self.bias, stride=self.stride, padding=self.padding,
                                       output_padding=self.output_padding, dilation=self.dilation, groups=self.groups)
         else:
             return F.conv2d(x, self.weight * self.std, self.bias, stride=self.stride, padding=self.padding,
@@ -107,14 +108,14 @@ class Conv2d(nn.Module):
 
 class ConvTranspose2d(Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
-                 groups=1, bias=True, gain=np.sqrt(2.0 / (1 + 0.2 ** 2))):
+                 groups=1, bias=True, gain=np.sqrt(2.0)):
         super(ConvTranspose2d, self).__init__(in_channels, out_channels, kernel_size, stride, padding,
                                               output_padding, dilation, groups, bias, gain, True)
 
 
 class SeparableConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
-                 bias=True, gain=np.sqrt(2.0 / (1 + 0.2 ** 2)), transpose=False):
+                 bias=True, gain=np.sqrt(2.0), transpose=False):
         super(SeparableConv2d, self).__init__()
         self.spatial_conv = Conv2d(in_channels, in_channels, kernel_size, stride, padding, output_padding, dilation,
                                    in_channels, False, 1, transpose)
@@ -126,7 +127,7 @@ class SeparableConv2d(nn.Module):
 
 class SeparableConvTranspose2d(Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
-                 bias=True, gain=np.sqrt(2.0 / (1 + 0.2 ** 2))):
+                 bias=True, gain=np.sqrt(2.0)):
         super(SeparableConvTranspose2d, self).__init__(in_channels, out_channels, kernel_size, stride, padding,
                                               output_padding, dilation, bias, gain, True)
 
