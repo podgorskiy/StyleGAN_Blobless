@@ -109,7 +109,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
     generator_optimizer = optim.Adam([
         {'params': model.module.generator.parameters()},
-        {'params': model.module.mapping.parameters(), 'lr': cfg.TRAIN.BASE_LEARNING_RATE * 0.01}
+        {'params': model.module.mapping.parameters()}
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
 
     discriminator_optimizer = optim.Adam([

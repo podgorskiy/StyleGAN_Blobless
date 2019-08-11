@@ -58,7 +58,8 @@ def load_from(name, cfg):
 
     Gs = m[2]
 
-    Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
+    #Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
+    #D = tflib.Network('D', func_name='stylegan.training.networks_stylegan.D_basic', num_channels=3, resolution=1024)
 
     #Gs_.copy_vars_from(Gs)
 
@@ -86,6 +87,7 @@ def load_from(name, cfg):
     model.generator.const[:] = tensor('G_synthesis/4x4/Const/const')
 
     for i in range(model.generator.layer_count):
+        j = model.discriminator.layer_count - i - 1
         name = '%dx%d' % (2 ** (2 + i), 2 ** (2 + i))
         block = model.generator.decode_block[i]
 
@@ -115,8 +117,42 @@ def load_from(name, cfg):
         block.style_2.weight[:] = tensor('%s/StyleMod/weight' % prefix_2, (1, 0))
         block.style_2.bias[:] = tensor('%s/StyleMod/bias' % prefix_2)
 
-        model.generator.to_rgb[i].to_rgb.weight[:] = tensor('G_synthesis/ToRGB_lod%d/weight' % (8-i), (3, 2, 0, 1))
-        model.generator.to_rgb[i].to_rgb.bias[:] = tensor('G_synthesis/ToRGB_lod%d/bias' % (8-i))
+        model.generator.to_rgb[i].to_rgb.weight[:] = tensor('G_synthesis/ToRGB_lod%d/weight' % (j), (3, 2, 0, 1))
+        model.generator.to_rgb[i].to_rgb.bias[:] = tensor('G_synthesis/ToRGB_lod%d/bias' % (j))
+
+    def tensor(x, transpose=None):
+        x = m[1].vars[x].eval()
+        if transpose:
+            x = np.transpose(x, transpose)
+        return torch.tensor(x)
+
+    for i in range(model.discriminator.layer_count):
+        j = model.discriminator.layer_count - i - 1
+        prefix = '%dx%d' % (2 ** (2 + j), 2 ** (2 + j))
+        block = model.discriminator.encode_block[i]
+
+        if not block.last:
+            prefix_1 = '%s/Conv0' % prefix
+            prefix_2 = '%s/Conv1_down' % prefix
+        else:
+            prefix_1 = '%s/Conv' % prefix
+            prefix_2 = '%s/Dense0' % prefix
+
+        block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (3, 2, 0, 1))
+
+        if not block.last:
+            block.conv_2.weight[:] = tensor('%s/weight' % prefix_2, (3, 2, 0, 1))
+        else:
+            block.dense.weight[:] = tensor('%s/weight' % prefix_2, (1, 0))
+
+        block.bias_1[0, :, 0, 0] = tensor('%s/bias' % prefix_1)
+        block.bias_2[0, :, 0, 0] = tensor('%s/bias' % prefix_2)
+
+        model.discriminator.from_rgb[j].from_rgb.weight[:] = tensor('FromRGB_lod%d/weight' % (j), (3, 2, 0, 1))
+        model.discriminator.from_rgb[j].from_rgb.bias[:] = tensor('FromRGB_lod%d/bias' % (j))
+
+    model.discriminator.fc2.weight[:] = tensor('4x4/Dense1/weight', (1, 0))
+    model.discriminator.fc2.bias[:] = tensor('4x4/Dense1/bias')
     return model #, Gs_
 
 

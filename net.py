@@ -28,6 +28,23 @@ def pixel_norm(x, epsilon=1e-8):
     return x * torch.rsqrt(torch.mean(x.pow(2.0), dim=1, keepdim=True) + epsilon)
 
 
+def style_mod(x, style):
+    style = style.view(style.shape[0], 2, x.shape[1], 1, 1)
+    return x * (style[:, 0] + 1) + style[:, 1]
+
+
+def upscale2d(x, factor=2):
+    s = x.shape
+    x = torch.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
+    x = x.repeat(1, 1, 1, factor, 1, factor)
+    x = torch.reshape(x, [-1, s[1], s[2] * factor, s[3] * factor])
+    return x
+
+
+def downscale2d(x, factor=2):
+    return F.avg_pool2d(x, factor, factor)
+
+
 class Blur(nn.Module):
     def __init__(self, channels):
         super(Blur, self).__init__()
@@ -43,43 +60,42 @@ class Blur(nn.Module):
 
 
 class DiscriminatorBlock(nn.Module):
-    def __init__(self, inputs, outputs, last=False):
+    def __init__(self, inputs, outputs, last=False, fused_scale=True):
         super(DiscriminatorBlock, self).__init__()
-        self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1)
+        self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1, bias=False)
         self.blur = Blur(inputs)
         self.last = last
+        self.bias_1 = nn.Parameter(torch.Tensor(1, inputs, 1, 1))
+        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
+        with torch.no_grad():
+            self.bias_1.zero_()
+            self.bias_2.zero_()
+        self.fused_scale = fused_scale
         if last:
             self.dense = ln.Linear(inputs * 4 * 4, outputs)
         else:
-            self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1)
+            if fused_scale:
+                self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1, bias=False, transform_kernel=True)
+            else:
+                self.conv_2 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
 
     def forward(self, x):
         if self.last:
             x = minibatch_stddev_layer(x)
 
-        x = self.conv_1(x)
+        x = self.conv_1(x) + self.bias_1
         x = F.leaky_relu(x, 0.2)
 
         if self.last:
             x = self.dense(x.view(x.shape[0], -1))
         else:
             x = self.conv_2(self.blur(x))
+            if not self.fused_scale:
+                x = downscale2d(x)
+            x = x + self.bias_2
         x = F.leaky_relu(x, 0.2)
 
         return x
-
-
-def style_mod(x, style):
-    style = style.view(style.shape[0], 2, x.shape[1], 1, 1)
-    return x * (style[:, 0] + 1) + style[:, 1]
-
-
-def upscale2d(x, factor=2):
-    s = x.shape
-    x = torch.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
-    x = x.repeat(1, 1, 1, factor, 1, factor)
-    x = torch.reshape(x, [-1, s[1], s[2] * factor, s[3] * factor])
-    return x
 
 
 class DecodeBlock(nn.Module):
@@ -91,12 +107,15 @@ class DecodeBlock(nn.Module):
         self.fused_scale = fused_scale
         if has_first_conv:
             if fused_scale:
-                self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 3, 2, 1, bias=False)
+                self.conv_1 = ln.ConvTranspose2d(inputs, outputs, 3, 2, 1, bias=False, transform_kernel=True)
             else:
                 self.conv_1 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
 
         self.bias_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
+        with torch.no_grad():
+            self.bias_1.zero_()
+            self.bias_2.zero_()
         self.noise_weight_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_1.data.zero_()
         self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
@@ -175,11 +194,19 @@ class Discriminator(nn.Module):
         mul = 2
         inputs = startf
         self.encode_block: nn.ModuleList[DiscriminatorBlock] = nn.ModuleList()
+
+        resolution = 2 ** (self.layer_count + 1)
+
         for i in range(self.layer_count):
             outputs = min(self.maxf, startf * mul)
 
             self.from_rgb.append(FromRGB(channels, inputs))
-            block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1)
+
+            fused_scale = resolution >= 128
+
+            block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1, fused_scale=fused_scale)
+
+            resolution //= 2
 
             print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
             self.encode_block.append(block)
