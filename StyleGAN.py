@@ -33,8 +33,8 @@ from scheduler import ComboMultiStepLR
 from dlutils.batch_provider import batch_provider
 from dlutils.shuffle import shuffle_ndarray
 
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.enabled = True
+# torch.backends.cudnn.benchmark = True
+# torch.backends.cudnn.enabled = True
 
 
 def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
@@ -95,25 +95,34 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
     if distributed:
         model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+        generator = model.module.generator
+        discriminator = model.module.discriminator
+        mapping = model.module.mapping
+        dlatent_avg = model.module.dlatent_avg
+    else:
+        generator = model.generator
+        discriminator = model.discriminator
+        mapping = model.mapping
+        dlatent_avg = model.dlatent_avg
 
     count_param_override.print = lambda a: logger.info(a)
 
     logger.info("Trainable parameters generator:")
-    count_parameters(model.module.generator)
+    count_parameters(generator)
 
     logger.info("Trainable parameters discriminator:")
-    count_parameters(model.module.discriminator)
+    count_parameters(discriminator)
 
     arguments = dict()
     arguments["iteration"] = 0
 
     generator_optimizer = optim.Adam([
-        {'params': model.module.generator.parameters()},
-        {'params': model.module.mapping.parameters()}
+        {'params': generator.parameters()},
+        {'params': mapping.parameters()}
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
 
     discriminator_optimizer = optim.Adam([
-        {'params': model.module.discriminator.parameters()},
+        {'params': discriminator.parameters()},
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
 
     scheduler = ComboMultiStepLR(optimizers={'generator': generator_optimizer, 'discriminator': discriminator_optimizer},
@@ -122,10 +131,10 @@ def train(cfg, local_rank, world_size, distributed, logger):
                                  reference_batch_size=32)
 
     model_dict = {
-        'discriminator': model.module.discriminator,
-        'generator': model.module.generator,
-        'mapping': model.module.mapping,
-        'dlatent_avg': model.module.dlatent_avg
+        'discriminator': discriminator,
+        'generator': generator,
+        'mapping': mapping,
+        'dlatent_avg': dlatent_avg
     }
 
     if local_rank == 0:
@@ -146,7 +155,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
     arguments.update(extra_checkpoint_data)
 
-    layer_to_resolution = model.module.generator.layer_to_resolution
+    layer_to_resolution = generator.layer_to_resolution
 
     dataset = PickleDataset(cfg, logger, rank=local_rank)
     sample = torch.randn(32, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -166,57 +175,58 @@ def train(cfg, local_rank, world_size, distributed, logger):
         dataset.switch_fold(local_rank, lod2batch.lod)
         shuffle_ndarray(dataset.data_train)
 
-        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(), worker_count=4,
+        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(local_rank), worker_count=4,
                                  queue_size=8, report_progress=True)
 
         scheduler.set_batch_size(32)
-        scheduler.step()
 
-        for x_orig in batches:
-            if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
-                continue
-            x_orig = (x_orig.to(local_rank, non_blocking=True).permute(0, 3, 1, 2) / 127.5 - 1.).clone().detach().requires_grad_(True)
+        model.train()
 
-            model.train()
+        with torch.autograd.profiler.profile(use_cuda=True, enabled=False) as prof:
+            for x_orig in batches:
+                if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
+                    continue
+                x_orig = (x_orig.permute(0, 3, 1, 2) / 127.5 - 1.)
 
-            blend_factor = lod2batch.get_blend_factor()
+                blend_factor = lod2batch.get_blend_factor()
 
-            needed_resolution = layer_to_resolution[lod2batch.lod]
-            x = x_orig
+                needed_resolution = layer_to_resolution[lod2batch.lod]
+                x = x_orig
 
-            if lod2batch.in_transition:
-                needed_resolution_prev = layer_to_resolution[lod2batch.lod - 1]
-                x_prev = F.avg_pool2d(x_orig, 2, 2)
-                x_prev_2x = F.interpolate(x_prev, needed_resolution)
-                x = x * blend_factor + x_prev_2x * (1.0 - blend_factor)
+                if lod2batch.in_transition:
+                    needed_resolution_prev = layer_to_resolution[lod2batch.lod - 1]
+                    x_prev = F.avg_pool2d(x_orig, 2, 2)
+                    x_prev_2x = F.interpolate(x_prev, needed_resolution)
+                    x = x * blend_factor + x_prev_2x * (1.0 - blend_factor)
 
-            generator_optimizer.zero_grad()
-            discriminator_optimizer.zero_grad()
-            loss_d = model(x, lod2batch.lod, blend_factor, d_train=True)
-            tracker.update(dict(loss_d=loss_d))
-            loss_d.backward()
-            discriminator_optimizer.step()
+                discriminator_optimizer.zero_grad()
+                loss_d = model(x, lod2batch.lod, blend_factor, d_train=True)
+                tracker.update(dict(loss_d=loss_d))
+                loss_d.backward()
+                discriminator_optimizer.step()
 
-            generator_optimizer.zero_grad()
-            discriminator_optimizer.zero_grad()
-            loss_g = model(x, lod2batch.lod, blend_factor, d_train=False)
-            tracker.update(dict(loss_g=loss_g))
-            loss_g.backward()
-            generator_optimizer.step()
+                if local_rank == 0:
+                    betta = 0.5 ** (lod2batch.get_batch_size() / (10 * 1000.0))
+                    model_s.lerp(model, betta)
 
-            betta = 0.5 ** (lod2batch.get_batch_size() / (10 * 1000.0))
+                generator_optimizer.zero_grad()
+                loss_g = model(x, lod2batch.lod, blend_factor, d_train=False)
+                tracker.update(dict(loss_g=loss_g))
+                loss_g.backward()
+                generator_optimizer.step()
 
-            if local_rank == 0:
-                model_s.lerp(model.module, betta)
+                lod2batch.step()
+                if local_rank == 0 and lod2batch.is_time_to_report():
+                    save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
 
-            lod2batch.step()
-            if local_rank == 0 and lod2batch.is_time_to_report():
-                save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
+        #print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
         if local_rank == 0:
             save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
             if epoch > 2:
                 checkpointer.save("model_tmp")
+
+        scheduler.step()
 
     logger.info("Training finish!... save training results")
     if local_rank == 0:

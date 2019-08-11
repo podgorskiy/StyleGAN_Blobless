@@ -213,7 +213,7 @@ def train_net(args):
                                 logger=logger,
                                 save=True)
 
-    #checkpointer.save('karras2019stylegan-ffhq')
+    checkpointer.save('karras2019stylegan-ffhq')
 
 
 def run():

@@ -42,12 +42,15 @@ class PickleDataset(torch.utils.data.Dataset):
 
 
 class BatchCollator(object):
+    def __init__(self, device=torch.device("cpu")):
+        self.device = device
+
     def __call__(self, batch):
         with torch.no_grad():
             x = np.asarray(batch, dtype=np.float32)
-            x = torch.tensor(x, requires_grad=True, device=torch.device("cpu"))
-            #x = x.pin_memory()
-            assert not x.is_cuda
-            #assert x.is_pinned()
+            x = torch.tensor(x, requires_grad=True, device=torch.device(self.device))
+            # x = x.pin_memory()
+            # assert not x.is_cuda
+            # assert x.is_pinned()
             return x
 

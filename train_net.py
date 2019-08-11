@@ -32,17 +32,14 @@ def setup(rank, world_size):
     # initialize the process group
     distributed.init_process_group("nccl", rank=rank, world_size=world_size)
 
-    # Explicitly setting seed to make sure that models created in two processes
-    # start from same random weights and biases.
-    torch.manual_seed(42)
-
 
 def cleanup():
     distributed.destroy_process_group()
 
 
 def train_net(rank, world_size, args):
-    setup(rank, world_size)
+    if world_size > 1:
+        setup(rank, world_size)
     torch.cuda.set_device(rank)
 
     cfg = get_cfg_defaults()
@@ -80,7 +77,7 @@ def train_net(rank, world_size, args):
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    args.distributed = True
+    args.distributed = world_size > 1
     train(cfg, rank, world_size, args.distributed, logger)
 
 
@@ -102,10 +99,17 @@ def run(fn, world_size):
 
     args = parser.parse_args()
 
-    mp.spawn(fn,
-             args=(world_size, args),
-             nprocs=world_size,
-             join=True)
+    try:
+        if world_size > 1:
+            mp.spawn(fn,
+                     args=(world_size, args),
+                     nprocs=world_size,
+                     join=True)
+        else:
+            train_net(0, world_size, args)
+    finally:
+        if world_size > 1:
+            cleanup()
 
 
 if __name__ == '__main__':

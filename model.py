@@ -5,6 +5,7 @@ import losses
 from net import Generator, Mapping, Discriminator
 import numpy as np
 
+
 class DLatent(nn.Module):
     def __init__(self, dlatent_size, layer_count):
         super(DLatent, self).__init__()
@@ -30,9 +31,9 @@ class Model(nn.Module):
         styles = self.mapping(z)
 
         if self.dlatent_avg_beta is not None:
-            batch_avg = styles.mean(dim=0)
-            self.dlatent_avg.buff.data = \
-                self.dlatent_avg.buff.data * self.dlatent_avg_beta + batch_avg.data * (1.0 - self.dlatent_avg_beta)
+            with torch.no_grad():
+                batch_avg = styles.mean(dim=0)
+                self.dlatent_avg.buff.data.lerp_(batch_avg.data, 1.0 - self.dlatent_avg_beta)
 
         if self.style_mixing_prob is not None:
             if random.random() < self.style_mixing_prob:
@@ -45,27 +46,33 @@ class Model(nn.Module):
                 styles = torch.where(layer_idx < mixing_cutoff, styles, styles2)
 
         if self.truncation_psi is not None:
-            styles = styles * self.truncation_psi + self.dlatent_avg.buff.detach() * (1.0 - self.truncation_psi)
+            styles = torch.lerp(self.dlatent_avg.buff.data, styles, self.truncation_psi)
 
         rec = self.generator.forward(styles, lod, blend_factor)
         return rec
 
     def forward(self, x, lod, blend_factor, d_train):
-        rec = self.generate(lod, blend_factor, count=x.shape[0])
-
         if d_train:
+            with torch.no_grad():
+                rec = self.generate(lod, blend_factor, count=x.shape[0])
+            self.discriminator.requires_grad_(True)
             d_result_real = self.discriminator(x, lod, blend_factor).squeeze()
             d_result_fake = self.discriminator(rec.detach(), lod, blend_factor).squeeze()
 
             loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
             return loss_d
         else:
+            rec = self.generate(lod, blend_factor, count=x.shape[0])
+            self.discriminator.requires_grad_(False)
             d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()
             loss_g = losses.generator_logistic_non_saturating(d_result_fake)
             return loss_g
 
     def lerp(self, other, betta):
-        params = list(self.mapping.parameters()) + list(self.generator.parameters()) + list(self.dlatent_avg.parameters())
-        other_param = list(other.mapping.parameters()) + list(other.generator.parameters()) + list(other.dlatent_avg.parameters())
-        for p, p_other in zip(params, other_param):
-            p.data = p.data * betta + p_other.data * (1.0 - betta)
+        if hasattr(other, 'module'):
+            other = other.module
+        with torch.no_grad():
+            params = list(self.mapping.parameters()) + list(self.generator.parameters()) + list(self.dlatent_avg.parameters())
+            other_param = list(other.mapping.parameters()) + list(other.generator.parameters()) + list(other.dlatent_avg.parameters())
+            for p, p_other in zip(params, other_param):
+                p.data.lerp_(p_other.data, 1.0 - betta)

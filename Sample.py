@@ -66,7 +66,7 @@ def save_sample(model, sample, i):
             resultsample = x_rec * 0.5 + 0.5
             resultsample = resultsample.cpu()
             save_image(resultsample,
-                       'sample_%i.png' % i, nrow=16)
+                       'sample_%i.png' % i, nrow=4)
 
         save_pic(x_rec)
 
@@ -121,8 +121,8 @@ def sample(cfg, logger):
     #     sample = sample_a * (1.0 - x) + sample_b * x
     #     save_sample(model, sample, i)
 
-    rnd = np.random.RandomState(5)
-    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
+    rnd = np.random.RandomState(3456)
+    latents = rnd.randn(16, cfg.MODEL.LATENT_SPACE_SIZE)
     sample = torch.tensor(latents).float().cuda()  # torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
     save_sample(model, sample, 0)
     exit()

@@ -30,7 +30,7 @@ def pixel_norm(x, epsilon=1e-8):
 
 def style_mod(x, style):
     style = style.view(style.shape[0], 2, x.shape[1], 1, 1)
-    return x * (style[:, 0] + 1) + style[:, 1]
+    return torch.addcmul(style[:, 1], tensor1=x, tensor2=style[:, 0] + 1)
 
 
 def upscale2d(x, factor=2):
@@ -134,7 +134,7 @@ class DecodeBlock(nn.Module):
             x = self.conv_1(x)
             x = self.blur(x)
 
-        x = x + self.noise_weight_1 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
 
         x = x + self.bias_1
 
@@ -146,7 +146,7 @@ class DecodeBlock(nn.Module):
 
         x = self.conv_2(x)
 
-        x = x + self.noise_weight_2 * torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]])
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
 
         x = x + self.bias_2
 
@@ -235,7 +235,7 @@ class Discriminator(nn.Module):
         x_prev = self.from_rgb[self.layer_count - (lod - 1) - 1](x_prev)
         x_prev = F.leaky_relu(x_prev, 0.2)
 
-        x = x * blend + x_prev * (1.0 - blend)
+        x = torch.lerp(x_prev, x, blend)
 
         for i in range(self.layer_count - (lod - 1) - 1, self.layer_count):
             x = self.encode_block[i](x)
@@ -318,7 +318,7 @@ class Generator(nn.Module):
         needed_resolution = self.layer_to_resolution[lod]
 
         x_prev = F.interpolate(x_prev, size=needed_resolution)
-        x = x * blend + x_prev * (1.0 - blend)
+        x = torch.lerp(x_prev, x, blend)
 
         return x
 
