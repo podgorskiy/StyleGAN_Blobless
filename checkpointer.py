@@ -16,6 +16,7 @@
 import os
 from torch import nn
 import torch
+import utils
 
 
 def get_model_dict(x):
@@ -59,10 +60,14 @@ class Checkpointer(object):
             data["scheduler"] = self.scheduler.state_dict()
         data.update(kwargs)
 
-        save_file = os.path.join(self.cfg.OUTPUT_DIR, "%s.pth" % _name)
-        self.logger.info("Saving checkpoint to %s" % save_file)
-        torch.save(data, save_file)
-        self.tag_last_checkpoint(save_file)
+        @utils.async_func
+        def save_data():
+            save_file = os.path.join(self.cfg.OUTPUT_DIR, "%s.pth" % _name)
+            self.logger.info("Saving checkpoint to %s" % save_file)
+            torch.save(data, save_file)
+            self.tag_last_checkpoint(save_file)
+
+        save_data()
 
     def load(self, ignore_last_checkpoint=False, file_name=None):
         save_file = os.path.join(self.cfg.OUTPUT_DIR, "last_checkpoint")

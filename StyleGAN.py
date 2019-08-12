@@ -50,7 +50,7 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
         model.eval()
         x_rec = model.generate(lod2batch.lod, lod2batch.get_blend_factor(), z=sample)
 
-        @utils.Async
+        @utils.async_func
         def save_pic(x, x_rec):
             tracker.register_means(lod2batch.current_epoch + lod2batch.iteration * 1.0 / lod2batch.get_dataset_size())
             tracker.plot()
@@ -158,7 +158,10 @@ def train(cfg, local_rank, world_size, distributed, logger):
     layer_to_resolution = generator.layer_to_resolution
 
     dataset = PickleDataset(cfg, logger, rank=local_rank)
-    sample = torch.randn(32, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
+
+    rnd = np.random.RandomState(3456)
+    latents = rnd.randn(32, cfg.MODEL.LATENT_SPACE_SIZE)
+    sample = torch.tensor(latents).float().cuda()
 
     lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(dataset) * world_size)
 

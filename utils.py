@@ -10,31 +10,28 @@ def save_model(x, name):
         torch.save(x.state_dict(), name)
 
 
-class TimeoutError(RuntimeError):
-    pass
-
-
 class AsyncCall(object):
-    def __init__(self, fnc, callback = None):
+    def __init__(self, fnc, callback=None):
         self.Callable = fnc
         self.Callback = callback
+        self.result = None
 
     def __call__(self, *args, **kwargs):
-        self.Thread = threading.Thread(target = self.run, name = self.Callable.__name__, args = args, kwargs = kwargs)
+        self.Thread = threading.Thread(target = self.run, name=self.Callable.__name__, args=args, kwargs=kwargs)
         self.Thread.start()
         return self
 
-    def wait(self, timeout = None):
+    def wait(self, timeout=None):
         self.Thread.join(timeout)
         if self.Thread.isAlive():
-            raise TimeoutError()
+            raise TimeoutError
         else:
-            return self.Result
+            return self.result
 
     def run(self, *args, **kwargs):
-        self.Result = self.Callable(*args, **kwargs)
+        self.result = self.Callable(*args, **kwargs)
         if self.Callback:
-            self.Callback(self.Result)
+            self.Callback(self.result)
 
 
 class AsyncMethod(object):
@@ -46,10 +43,10 @@ class AsyncMethod(object):
         return AsyncCall(self.Callable, self.Callback)(*args, **kwargs)
 
 
-def Async(fnc = None, callback = None):
-    if fnc == None:
-        def AddAsyncCallback(fnc):
-            return AsyncMethod(fnc, callback)
-        return AddAsyncCallback
+def async_func(fnc=None, callback=None):
+    if fnc is None:
+        def add_async_callback(f):
+            return AsyncMethod(f, callback)
+        return add_async_callback
     else:
         return AsyncMethod(fnc, callback)

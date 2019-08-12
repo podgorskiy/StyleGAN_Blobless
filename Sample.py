@@ -60,7 +60,7 @@ def save_sample(model, sample, i):
 
     with torch.no_grad():
         model.eval()
-        x_rec = model.generate(8, 1, z=sample)
+        x_rec = model.generate(model.generator.layer_count - 1, 1, z=sample)
 
         def save_pic(x_rec):
             resultsample = x_rec * 0.5 + 0.5
