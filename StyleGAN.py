@@ -28,6 +28,7 @@ from net import *
 from tracker import LossTracker
 from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
+from custom_adam import LREQAdam
 
 from dlutils.batch_provider import batch_provider
 from dlutils.shuffle import shuffle_ndarray
@@ -57,9 +58,11 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
             x_rec = F.interpolate(x_rec, 128)
             result_sample = x_rec * 0.5 + 0.5
             result_sample = result_sample.cpu()
-            save_image(result_sample,
-                       'results/sample_' + str(lod2batch.current_epoch + 1)
-                       + "_" + str(lod2batch.iteration // 1000) + '.jpg', nrow=16)
+            save_image(result_sample, os.path.join(cfg.OUTPUT_DIR,
+                                                   'sample_%d_%d.jpg' % (
+                                                       lod2batch.current_epoch + 1,
+                                                       lod2batch.iteration // 1000)
+                                                   ), nrow=16)
 
         save_pic(x, x_rec)
 
@@ -115,12 +118,12 @@ def train(cfg, local_rank, world_size, distributed, logger):
     arguments = dict()
     arguments["iteration"] = 0
 
-    generator_optimizer = optim.Adam([
+    generator_optimizer = LREQAdam([
         {'params': generator.parameters()},
         {'params': mapping.parameters()}
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(cfg.TRAIN.ADAM_BETA_0, cfg.TRAIN.ADAM_BETA_1), weight_decay=0)
 
-    discriminator_optimizer = optim.Adam([
+    discriminator_optimizer = LREQAdam([
         {'params': discriminator.parameters()},
     ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(cfg.TRAIN.ADAM_BETA_0, cfg.TRAIN.ADAM_BETA_1), weight_decay=0)
 

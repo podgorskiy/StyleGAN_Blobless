@@ -66,7 +66,7 @@ def save_sample(model, sample, i):
             resultsample = x_rec * 0.5 + 0.5
             resultsample = resultsample.cpu()
             save_image(resultsample,
-                       'sample_%i.png' % i, nrow=4)
+                       'sample_%i_lr.png' % i, nrow=16)
 
         save_pic(x_rec)
 
@@ -77,13 +77,14 @@ def sample(cfg, logger):
         layer_count= cfg.MODEL.LAYER_COUNT,
         maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
         latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
-        truncation_psi=0.7, #cfg.MODEL.TRUNCATIOM_PSI,
+        truncation_psi=cfg.MODEL.TRUNCATIOM_PSI,
+        truncation_cutoff=cfg.MODEL.TRUNCATIOM_CUTOFF,
         mapping_layers=cfg.MODEL.MAPPING_LAYERS,
         channels=3)
     del model.discriminator
     model.eval()
 
-    torch.cuda.manual_seed_all(110)
+    #torch.cuda.manual_seed_all(110)
 
     logger.info("Trainable parameters generator:")
     count_parameters(model.generator)
@@ -106,10 +107,11 @@ def sample(cfg, logger):
                                 logger=logger,
                                 save=True)
 
-    file_name = 'karras2019stylegan-ffhq'
+    # file_name = 'karras2019stylegan-ffhq'
+    file_name = 'results/model_final'
 
     checkpointer.load(file_name=file_name + '.pth')
-    # checkpointer.save(file_name + '_stripped')
+    checkpointer.save('final_stripped')
 
     #sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
 
@@ -122,7 +124,7 @@ def sample(cfg, logger):
     #     save_sample(model, sample, i)
 
     rnd = np.random.RandomState(3456)
-    latents = rnd.randn(16, cfg.MODEL.LATENT_SPACE_SIZE)
+    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
     sample = torch.tensor(latents).float().cuda()  # torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
     save_sample(model, sample, 0)
     exit()
@@ -162,7 +164,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment_stylegan.yaml",
+        default="configs/experiment.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,

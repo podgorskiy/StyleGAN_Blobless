@@ -23,13 +23,30 @@ from dlutils.pytorch import count_parameters, millify
 import lreq as ln
 
 
+def lerp(s, e, x):
+    return s + (e-s) * x
+
+
+def rsqrt(x):
+    return 1.0 / x ** 0.5
+
+
+def addcmul(x, value, tensor1, tensor2):
+    return x + value * tensor1 * tensor2
+
+
+torch.lerp = lerp
+torch.rsqrt = rsqrt
+torch.addcmul = addcmul
+
+
 def pixel_norm(x, epsilon=1e-8):
     return x * torch.rsqrt(torch.mean(x.pow(2.0), dim=1, keepdim=True) + epsilon)
 
 
 def style_mod(x, style):
     style = style.view(style.shape[0], 2, x.shape[1], 1, 1)
-    return torch.addcmul(style[:, 1], tensor1=x, tensor2=style[:, 0] + 1)
+    return torch.addcmul(style[:, 1], value=1.0, tensor1=x, tensor2=style[:, 0] + 1)
 
 
 def upscale2d(x, factor=2):
@@ -133,7 +150,7 @@ class DecodeBlock(nn.Module):
             x = self.conv_1(x)
             x = self.blur(x)
 
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([int(x.shape[0]), 1, int(x.shape[2]), int(x.shape[3])]))
 
         x = x + self.bias_1
 
@@ -145,7 +162,7 @@ class DecodeBlock(nn.Module):
 
         x = self.conv_2(x)
 
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([int(x.shape[0]), 1, int(x.shape[2]), int(x.shape[3])]))
 
         x = x + self.bias_2
 
