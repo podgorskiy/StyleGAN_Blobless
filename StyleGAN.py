@@ -28,7 +28,6 @@ from net import *
 from tracker import LossTracker
 from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
-from custom_adam import LREQAdam
 
 from dlutils.batch_provider import batch_provider
 from dlutils.shuffle import shuffle_ndarray
