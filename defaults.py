@@ -1,3 +1,18 @@
+# Copyright 2019 Stanislav Pidhorskyi
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 from yacs.config import CfgNode as CN
 
 
@@ -17,6 +32,7 @@ _C.MODEL.MAX_CHANNEL_COUNT = 512
 _C.MODEL.LATENT_SPACE_SIZE = 256
 _C.MODEL.DLATENT_AVG_BETA = 0.995
 _C.MODEL.TRUNCATIOM_PSI = 0.7
+_C.MODEL.TRUNCATIOM_CUTOFF = 8
 _C.MODEL.STYLE_MIXING_PROB = 0.9
 _C.MODEL.MAPPING_LAYERS = 5
 
@@ -24,9 +40,11 @@ _C.TRAIN = CN()
 
 _C.TRAIN.EPOCHS_PER_LOD = 15
 
-_C.TRAIN.BASE_LEARNING_RATE = 0.00005 / 4
+_C.TRAIN.BASE_LEARNING_RATE = 0.0015
+_C.TRAIN.ADAM_BETA_0 = 0.0
+_C.TRAIN.ADAM_BETA_1 = 0.99
 _C.TRAIN.LEARNING_DECAY_RATE = 0.1
-_C.TRAIN.LEARNING_DECAY_STEPS = [90, 100]
+_C.TRAIN.LEARNING_DECAY_STEPS = []
 _C.TRAIN.TRAIN_EPOCHS = 110
 
 _C.TRAIN.ALPHA = 0.15
@@ -37,6 +55,8 @@ _C.TRAIN.LOD_2_BATCH_8GPU = [512, 256, 128,   64,   32,    32]
 _C.TRAIN.LOD_2_BATCH_4GPU = [512, 256, 128,   64,   32,    16]
 _C.TRAIN.LOD_2_BATCH_2GPU = [256, 256, 128,   64,   32,    16]
 _C.TRAIN.LOD_2_BATCH_1GPU = [128, 128, 128,   64,   32,    16]
+
+_C.TRAIN.SNAPSHOT_FREQ = [60, 80, 60, 30, 20, 10, 20, 20, 20]
 
 
 def get_cfg_defaults():

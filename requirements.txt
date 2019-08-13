@@ -2,5 +2,5 @@ numpy
 scipy
 tqdm
 dlutils==0.0.4
-torch >= 0.4.1
+torch >= 1.2.0
 torchvision

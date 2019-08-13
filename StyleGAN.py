@@ -21,7 +21,6 @@ import utils
 import torch.cuda.comm
 import torch.cuda.nccl
 import dlutils.pytorch.count_parameters as count_param_override
-#import apex
 import lod_driver
 from dataloader import PickleDataset, BatchCollator
 from model import Model
@@ -29,6 +28,7 @@ from net import *
 from tracker import LossTracker
 from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
+from custom_adam import LREQAdam
 
 from dlutils.batch_provider import batch_provider
 from dlutils.shuffle import shuffle_ndarray
@@ -56,12 +56,11 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
             tracker.plot()
 
             x_rec = F.interpolate(x_rec, 128)
-            #x = F.interpolate(x[:32], 128)
-            #resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
-            resultsample = x_rec * 0.5 + 0.5
-            resultsample = resultsample.cpu()
-            save_image(resultsample,
-                       'results/sample_' + str(lod2batch.current_epoch + 1) + "_" + str(lod2batch.iteration // 1000) + '.jpg', nrow=16)
+            result_sample = x_rec * 0.5 + 0.5
+            result_sample = result_sample.cpu()
+            save_image(result_sample,
+                       'results/sample_' + str(lod2batch.current_epoch + 1)
+                       + "_" + str(lod2batch.iteration // 1000) + '.jpg', nrow=16)
 
         save_pic(x, x_rec)
 
@@ -87,6 +86,7 @@ def train(cfg, local_rank, world_size, distributed, logger):
             maxf=cfg.MODEL.MAX_CHANNEL_COUNT,
             latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
             truncation_psi=cfg.MODEL.TRUNCATIOM_PSI,
+            truncation_cutoff=cfg.MODEL.TRUNCATIOM_CUTOFF,
             mapping_layers=cfg.MODEL.MAPPING_LAYERS,
             channels=3)
         del model_s.discriminator
@@ -119,13 +119,17 @@ def train(cfg, local_rank, world_size, distributed, logger):
     generator_optimizer = optim.Adam([
         {'params': generator.parameters()},
         {'params': mapping.parameters()}
-    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
+    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(cfg.TRAIN.ADAM_BETA_0, cfg.TRAIN.ADAM_BETA_1), weight_decay=0)
 
     discriminator_optimizer = optim.Adam([
         {'params': discriminator.parameters()},
-    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(0.0, 0.99), weight_decay=0)
+    ], lr=cfg.TRAIN.BASE_LEARNING_RATE, betas=(cfg.TRAIN.ADAM_BETA_0, cfg.TRAIN.ADAM_BETA_1), weight_decay=0)
 
-    scheduler = ComboMultiStepLR(optimizers={'generator': generator_optimizer, 'discriminator': discriminator_optimizer},
+    scheduler = ComboMultiStepLR(optimizers=
+                                 {
+                                    'generator': generator_optimizer,
+                                    'discriminator': discriminator_optimizer
+                                 },
                                  milestones=cfg.TRAIN.LEARNING_DECAY_STEPS,
                                  gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
                                  reference_batch_size=32)

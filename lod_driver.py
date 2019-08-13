@@ -1,3 +1,18 @@
+# Copyright 2019 Stanislav Pidhorskyi
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 import torch
 import math
 import time
@@ -27,7 +42,7 @@ class LODDriver:
         self.epoch_end_time = 0
         self.epoch_start_time = 0
         self.per_epoch_ptime = 0
-        self.snapshots = [60, 80, 60, 30, 20, 10, 20, 20, 20]
+        self.snapshots = cfg.TRAIN.SNAPSHOT_FREQ
         self.tick_start_nimg = 0
 
     def get_batch_size(self):
@@ -43,8 +58,8 @@ class LODDriver:
         return self.get_batch_size() // self.world_size
 
     def get_blend_factor(self):
-        blend_factor = float((self.current_epoch % self.cfg.TRAIN.EPOCHS_PER_LOD) * self.dataset_size + self.iteration) / float(
-            self.cfg.TRAIN.EPOCHS_PER_LOD // 2 * self.dataset_size)
+        blend_factor = float((self.current_epoch % self.cfg.TRAIN.EPOCHS_PER_LOD) * self.dataset_size + self.iteration)
+        blend_factor /= float(self.cfg.TRAIN.EPOCHS_PER_LOD // 2 * self.dataset_size)
         blend_factor = math.sin(blend_factor * math.pi - 0.5 * math.pi) * 0.5 + 0.5
 
         if not self.in_transition:

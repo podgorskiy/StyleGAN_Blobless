@@ -18,11 +18,7 @@ import sys
 import argparse
 import logging
 import torch
-import torch.multiprocessing as mp
-from torch.utils.collect_env import get_pretty_env_info
 from defaults import get_cfg_defaults
-from StyleGAN import train
-from torch import distributed
 import dnnlib
 import dnnlib.tflib
 import dnnlib.tflib as tflib
