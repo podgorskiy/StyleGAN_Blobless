@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
+import os
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -23,21 +24,22 @@ from dlutils.pytorch import count_parameters, millify
 import lreq as ln
 
 
-def lerp(s, e, x):
-    return s + (e-s) * x
+if os.environ.get('EXPORT_ONNX', 'False') == 'True':
+    def lerp(s, e, x):
+        return s + (e-s) * x
 
 
-def rsqrt(x):
-    return 1.0 / x ** 0.5
+    def rsqrt(x):
+        return 1.0 / x ** 0.5
 
 
-def addcmul(x, value, tensor1, tensor2):
-    return x + value * tensor1 * tensor2
+    def addcmul(x, value, tensor1, tensor2):
+        return x + value * tensor1 * tensor2
 
 
-torch.lerp = lerp
-torch.rsqrt = rsqrt
-torch.addcmul = addcmul
+    torch.lerp = lerp
+    torch.rsqrt = rsqrt
+    torch.addcmul = addcmul
 
 
 def pixel_norm(x, epsilon=1e-8):
@@ -134,11 +136,11 @@ class DecodeBlock(nn.Module):
             self.bias_2.zero_()
         self.noise_weight_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_1.data.zero_()
-        self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-5)
+        self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
         self.conv_2 = ln.Conv2d(outputs, outputs, 3, 1, 1, bias=False)
         self.noise_weight_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_2.data.zero_()
-        self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-5)
+        self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
         self.style_1 = ln.Linear(latent_size, 2 * outputs, gain=1)
         self.style_2 = ln.Linear(latent_size, 2 * outputs, gain=1)
         self.blur = Blur(outputs)

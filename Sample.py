@@ -37,6 +37,8 @@ from dlutils.pytorch import count_parameters
 from defaults import get_cfg_defaults
 import argparse
 import logging
+import sys
+import bimpy
 
 im_size = 128
 
@@ -107,11 +109,11 @@ def sample(cfg, logger):
                                 logger=logger,
                                 save=True)
 
-    # file_name = 'karras2019stylegan-ffhq'
-    file_name = 'results/model_final'
+    file_name = 'karras2019stylegan-ffhq'
+    # file_name = 'results/model_final'
 
     checkpointer.load(file_name=file_name + '.pth')
-    checkpointer.save('final_stripped')
+    # checkpointer.save('final_stripped')
 
     #sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
 
@@ -123,11 +125,45 @@ def sample(cfg, logger):
     #     sample = sample_a * (1.0 - x) + sample_b * x
     #     save_sample(model, sample, i)
 
-    rnd = np.random.RandomState(3456)
+
+    ctx = bimpy.Context()
+
+    ctx.init(1800, 1600, "Styles")
+
+    rnd = np.random.RandomState(5)
+    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
+    sample = torch.tensor(latents).float().cuda()
+
+    def update_image(sample):
+        with torch.no_grad():
+            model.eval()
+            x_rec = model.generate(model.generator.layer_count - 1, 1, z=sample)
+            resultsample = ((x_rec * 0.5 + 0.5) * 255).type(torch.long).clamp(0, 255)
+            resultsample = resultsample.cpu()[0, :, :, :]
+
+            return resultsample.type(torch.uint8).transpose(0, 2).transpose(0, 1)
+
+    im = update_image(sample)
+    print(im.shape)
+    im = bimpy.Image(im)
+
+    while(not ctx.should_close()):
+        with ctx:
+            bimpy.image(im)
+            if bimpy.button('Ok'):
+                im = bimpy.Image(update_image(sample))
+            if bimpy.button('Ok2'):
+                latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
+                sample = torch.tensor(latents).float().cuda() 
+                im = bimpy.Image(update_image(sample))
+            #bimpy.set_window_font_scale(2.0)
+
+    exit()
+
+    rnd = np.random.RandomState(111011)
     latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
     sample = torch.tensor(latents).float().cuda()  # torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
     save_sample(model, sample, 0)
-    exit()
 
     im_count = 16
     canvas = np.zeros([3, im_size * (im_count + 2), im_size * (im_count + 2)])
@@ -164,7 +200,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment.yaml",
+        default="configs/experiment_stylegan.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -185,5 +221,10 @@ if __name__ == '__main__':
 
     logger = logging.getLogger("logger")
     logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler(stream=sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s")
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
     sample(cfg, logger)
