@@ -1,5 +1,5 @@
 DATASET:
-  FOLD_COUNT: 8
+  PART_COUNT: 8
   PATH: /efs/user/pidhorss/celeba/data_fold_%d_lod_%d.pkl
 MODEL:
   LATENT_SPACE_SIZE: 128

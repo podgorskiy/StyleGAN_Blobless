@@ -36,7 +36,7 @@ class PickleDataset(torch.utils.data.Dataset):
             self.data_train = data_train
 
     def switch_fold(self, rank, lod):
-        data_to_load = self.cfg.DATASET.PATH % (rank % self.cfg.DATASET.FOLD_COUNT, lod)
+        data_to_load = self.cfg.DATASET.PATH % (rank % self.cfg.DATASET.PART_COUNT, lod)
 
         if data_to_load != self.last_data:
             self.last_data = data_to_load

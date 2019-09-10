@@ -149,13 +149,13 @@ def sample(cfg, logger):
 
     while(not ctx.should_close()):
         with ctx:
+            im = bimpy.Image(update_image(sample))
             bimpy.image(im)
-            if bimpy.button('Ok'):
-                im = bimpy.Image(update_image(sample))
-            if bimpy.button('Ok2'):
+            # if bimpy.button('Ok'):
+            if bimpy.button('NEXT'):
                 latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
                 sample = torch.tensor(latents).float().cuda() 
-                im = bimpy.Image(update_image(sample))
+                # im = bimpy.Image(update_image(sample))
             #bimpy.set_window_font_scale(2.0)
 
     exit()
