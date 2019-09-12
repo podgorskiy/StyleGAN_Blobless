@@ -22,19 +22,20 @@ import torch.cuda.comm
 import torch.cuda.nccl
 import dlutils.pytorch.count_parameters as count_param_override
 import lod_driver
-from dataloader import PickleDataset, BatchCollator
+from dataloader import *
 from model import Model
 from net import *
 from tracker import LossTracker
 from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
 from custom_adam import LREQAdam
+from tqdm import tqdm
 
 from dlutils.batch_provider import batch_provider
 from dlutils.shuffle import shuffle_ndarray
 
-# torch.backends.cudnn.benchmark = True
-# torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 
 
 def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
@@ -55,7 +56,7 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
             tracker.register_means(lod2batch.current_epoch + lod2batch.iteration * 1.0 / lod2batch.get_dataset_size())
             tracker.plot()
 
-            x_rec = F.interpolate(x_rec, 128)
+            #x_rec = F.interpolate(x_rec, 128)
             result_sample = x_rec * 0.5 + 0.5
             result_sample = result_sample.cpu()
             save_image(result_sample, os.path.join(cfg.OUTPUT_DIR,
@@ -163,7 +164,8 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
     layer_to_resolution = generator.layer_to_resolution
 
-    dataset = PickleDataset(cfg, logger, rank=local_rank)
+    # dataset = PickleDataset(cfg, logger, rank=local_rank)
+    dataset = TFRecordsDataset(cfg, logger, rank=local_rank, world_size=world_size, buffer_size_mb=1024)
 
     rnd = np.random.RandomState(3456)
     latents = rnd.randn(32, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -177,25 +179,35 @@ def train(cfg, local_rank, world_size, distributed, logger):
         model.train()
         lod2batch.set_epoch(epoch, [generator_optimizer, discriminator_optimizer])
 
-        logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d" % (lod2batch.get_batch_size(),
+        logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d - %dx%d, dataset size: %d" % (lod2batch.get_batch_size(),
                                                                 lod2batch.get_per_GPU_batch_size(),
-                                                                lod2batch.lod))
+                                                                lod2batch.lod,
+                                                                2 ** lod2batch.get_lod_power2(),
+                                                                2 ** lod2batch.get_lod_power2(),
+                                                                len(dataset) * world_size))
 
-        dataset.switch_fold(local_rank, lod2batch.lod)
-        shuffle_ndarray(dataset.data_train)
+        # dataset.switch_fold(local_rank, lod2batch.lod)
+        # shuffle_ndarray(dataset.data_train)
 
-        batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(local_rank), worker_count=4,
-                                 queue_size=8, report_progress=True)
 
+        # batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(local_rank), worker_count=4,
+        #                          queue_size=8, report_progress=True)
+
+        dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
+        batches = db.data_loader(iter(dataset), BatchCollator(local_rank), len(dataset) // lod2batch.get_per_GPU_batch_size())
         scheduler.set_batch_size(32)
 
         model.train()
 
+        need_permute = False
+
         with torch.autograd.profiler.profile(use_cuda=True, enabled=False) as prof:
-            for x_orig in batches:
+            for x_orig in tqdm(batches):
                 if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
                     continue
-                x_orig = (x_orig.permute(0, 3, 1, 2) / 127.5 - 1.)
+                if need_permute:
+                    x_orig = x_orig.permute(0, 3, 1, 2)
+                x_orig = (x_orig / 127.5 - 1.)
 
                 blend_factor = lod2batch.get_blend_factor()
 

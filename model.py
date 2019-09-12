@@ -53,6 +53,9 @@ class Model(nn.Module):
             maxf=maxf,
             channels=channels)
 
+        # self.mapping = torch.jit.trace(self.mapping, (torch.zeros(1, latent_size)))
+        # super(torch.jit.TracedModule, self.mapping).__setattr__("num_layers", 2 * layer_count)
+
         self.dlatent_avg = DLatent(latent_size, self.mapping.num_layers)
         self.latent_size = latent_size
         self.dlatent_avg_beta = dlatent_avg_beta
@@ -63,6 +66,8 @@ class Model(nn.Module):
     def generate(self, lod, blend_factor, z=None, count=32):
         if z is None:
             z = torch.randn(count, self.latent_size)
+
+        # with torch.jit.optimized_execution(True):
         styles = self.mapping(z)
 
         if self.dlatent_avg_beta is not None:

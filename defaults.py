@@ -24,6 +24,7 @@ _C.DATASET = CN()
 _C.DATASET.PATH = 'celeba/data_fold_%d_lod_%d.pkl'
 _C.DATASET.FFHQ_SOURCE = '/data/datasets/ffhq-dataset/tfrecords/ffhq/ffhq-r%02d.tfrecords'
 _C.DATASET.PART_COUNT = 1
+_C.DATASET.SIZE = 70000
 
 _C.DATASET.MAX_RESOLUTION_LEVEL = 10
 
@@ -59,7 +60,7 @@ _C.TRAIN.LOD_2_BATCH_4GPU = [512, 256, 128,   64,   32,    16]
 _C.TRAIN.LOD_2_BATCH_2GPU = [256, 256, 128,   64,   32,    16]
 _C.TRAIN.LOD_2_BATCH_1GPU = [128, 128, 128,   64,   32,    16]
 
-_C.TRAIN.SNAPSHOT_FREQ = [60, 80, 60, 30, 20, 10, 20, 20, 20]
+_C.TRAIN.SNAPSHOT_FREQ = [100, 80, 60, 30, 20, 10, 20, 20, 20]
 
 
 def get_cfg_defaults():

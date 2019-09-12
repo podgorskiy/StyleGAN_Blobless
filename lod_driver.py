@@ -45,11 +45,11 @@ class LODDriver:
         self.snapshots = cfg.TRAIN.SNAPSHOT_FREQ
         self.tick_start_nimg = 0
 
+    def get_lod_power2(self):
+        return self.lod + 2
+
     def get_batch_size(self):
-        if 0 <= self.lod < len(self.lod_2_batch):
-            return self.lod_2_batch[self.lod]
-        else:
-            return self.minibatch_base
+        return self.lod_2_batch[min(self.lod, len(self.lod_2_batch) - 1)]
 
     def get_dataset_size(self):
         return self.dataset_size
@@ -68,7 +68,7 @@ class LODDriver:
         return blend_factor
 
     def is_time_to_report(self):
-        if self.iteration >= self.tick_start_nimg + self.snapshots[self.lod] * 1000:
+        if self.iteration >= self.tick_start_nimg + self.snapshots[min(self.lod, len(self.snapshots) - 1)] * 1000:
             self.tick_start_nimg = self.iteration
             return True
         return False

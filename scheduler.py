@@ -75,7 +75,7 @@ class ComboMultiStepLR:
             x.__dict__.update(state_dict[k])
         last_epochs = [x.last_epoch for k, x in self.schedulers.items()]
         assert np.all(np.asarray(last_epochs) == last_epochs[0])
-        self.last_epoch = last_epochs[0] - 1
+        self.last_epoch = last_epochs[0] + 1
 
     def start_epoch(self):
-        return self.last_epoch + 1
+        return self.last_epoch

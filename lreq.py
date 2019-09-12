@@ -21,6 +21,9 @@ from torch.nn.parameter import Parameter
 import numpy as np
 
 
+use_implicit_lreq = True
+
+
 def is_sequence(arg):
     return (not hasattr(arg, "strip") and
             hasattr(arg, "__getitem__") or
@@ -34,7 +37,7 @@ def make_tuple(x, n):
 
 
 class Linear(nn.Module):
-    def __init__(self, in_features, out_features, bias=True, gain=np.sqrt(2.0), lrmul=1.0, implicit_lreq=False):
+    def __init__(self, in_features, out_features, bias=True, gain=np.sqrt(2.0), lrmul=1.0, implicit_lreq=use_implicit_lreq):
         super(Linear, self).__init__()
         self.in_features = in_features
         self.weight = Parameter(torch.Tensor(out_features, in_features))
@@ -75,7 +78,7 @@ class Linear(nn.Module):
 class Conv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
                  groups=1, bias=True, gain=np.sqrt(2.0), transpose=False, transform_kernel=False, lrmul=1.0,
-                 implicit_lreq=False):
+                 implicit_lreq=use_implicit_lreq):
         super(Conv2d, self).__init__()
         if in_channels % groups != 0:
             raise ValueError('in_channels must be divisible by groups')
@@ -155,7 +158,7 @@ class Conv2d(nn.Module):
 
 class ConvTranspose2d(Conv2d):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, dilation=1,
-                 groups=1, bias=True, gain=np.sqrt(2.0), transform_kernel=False, lrmul=1.0, implicit_lreq=False):
+                 groups=1, bias=True, gain=np.sqrt(2.0), transform_kernel=False, lrmul=1.0, implicit_lreq=use_implicit_lreq):
         super(ConvTranspose2d, self).__init__(in_channels=in_channels,
                                               out_channels=out_channels,
                                               kernel_size=kernel_size,

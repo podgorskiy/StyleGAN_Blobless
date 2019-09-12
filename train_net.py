@@ -85,7 +85,7 @@ def run(fn, world_size):
     parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment.yaml",
+        default="configs/experiment_ffhq.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
