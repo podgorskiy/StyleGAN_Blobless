@@ -76,7 +76,8 @@ class Checkpointer(object):
                 f = last_checkpoint.read().strip()
         except IOError:
             self.logger.info("No checkpoint found. Initializing model from scratch")
-            return {}
+            if file_name is None:
+                return {}
 
         if ignore_last_checkpoint:
             self.logger.info("Forced to Initialize model from scratch")
