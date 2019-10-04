@@ -67,7 +67,7 @@ class Checkpointer(object):
             torch.save(data, save_file)
             self.tag_last_checkpoint(save_file)
 
-        save_data()
+        return save_data()
 
     def load(self, ignore_last_checkpoint=False, file_name=None):
         save_file = os.path.join(self.cfg.OUTPUT_DIR, "last_checkpoint")
