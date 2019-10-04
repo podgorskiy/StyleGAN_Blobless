@@ -23,46 +23,13 @@ import numpy as np
 import torch
 import torch.tensor
 import torch.utils
-import torch.utils.data.dataloader
-try:
-    from Queue import Queue, Empty
-except ImportError:
-    from queue import Queue, Empty
-    import queue
+import torch.utils.data
+import time
+
+from dlutils.batch_provider import batch_provider
+from dlutils.shuffle import shuffle_ndarray
 
 cpu = torch.device('cpu')
-
-
-class PickleDataset(torch.utils.data.Dataset):
-    def __init__(self, cfg, logger, rank=0, data_train=None):
-        self.cfg = cfg
-        self.logger = logger
-        self.last_data = ""
-        if not data_train:
-            self.data_train = []
-            self.switch_fold(rank, 0)
-        else:
-            self.data_train = data_train
-
-    def switch_fold(self, rank, lod):
-        data_to_load = self.cfg.DATASET.PATH % (rank % self.cfg.DATASET.PART_COUNT, lod)
-
-        if data_to_load != self.last_data:
-            self.last_data = data_to_load
-            self.logger.info("Switching data!")
-
-            with open(data_to_load, 'rb') as pkl:
-                self.data_train = pickle.load(pkl)
-
-        self.logger.info("Train set size: %d" % len(self.data_train))
-        self.data_train = self.data_train[:4 * (len(self.data_train) // 4)]
-        self.data_train = np.asarray(self.data_train, dtype=np.uint8)
-
-    def __getitem__(self, index):
-        return self.data_train[index]
-
-    def __len__(self):
-        return len(self.data_train)
 
 
 class TFRecordsDataset:
@@ -108,7 +75,7 @@ class TFRecordsDataset:
         }
         buffer_size = self.buffer_size_b // (3 * img_size * img_size)
 
-        self.iterator = db.ParsedTFRecordsDatasetIterator(self.current_filenames, self.features, self.batch_size, buffer_size)
+        self.iterator = db.ParsedTFRecordsDatasetIterator(self.current_filenames, self.features, self.batch_size, buffer_size, seed=np.uint64(time.time() * 1000))
 
     def __iter__(self):
         return self.iterator
@@ -117,13 +84,17 @@ class TFRecordsDataset:
         return self.part_count_local * self.part_size
 
 
-class BatchCollator(object):
-    def __init__(self, device=torch.device("cpu")):
-        self.device = device
+def make_dataloader(cfg, logger, dataset, GPU_batch_size, local_rank):
+    class BatchCollator(object):
+        def __init__(self, device=torch.device("cpu")):
+            self.device = device
 
-    def __call__(self, batch):
-        with torch.no_grad():
-            #x = np.asarray(batch, dtype=np.float32)
-            x, = batch
-            x = torch.tensor(x, requires_grad=True, device=torch.device(self.device), dtype=torch.float32)
-            return x
+        def __call__(self, batch):
+            with torch.no_grad():
+                x, = batch
+                x = torch.tensor(x, requires_grad=True, device=torch.device(self.device), dtype=torch.float32)
+                return x
+
+    batches = db.data_loader(iter(dataset), BatchCollator(local_rank), len(dataset) // GPU_batch_size)
+
+    return batches

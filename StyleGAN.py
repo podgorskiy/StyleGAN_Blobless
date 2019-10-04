@@ -31,8 +31,6 @@ from scheduler import ComboMultiStepLR
 from custom_adam import LREQAdam
 from tqdm import tqdm
 
-from dlutils.batch_provider import batch_provider
-from dlutils.shuffle import shuffle_ndarray
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -164,7 +162,6 @@ def train(cfg, local_rank, world_size, distributed, logger):
 
     layer_to_resolution = generator.layer_to_resolution
 
-    # dataset = PickleDataset(cfg, logger, rank=local_rank)
     dataset = TFRecordsDataset(cfg, logger, rank=local_rank, world_size=world_size, buffer_size_mb=1024)
 
     rnd = np.random.RandomState(3456)
@@ -186,15 +183,10 @@ def train(cfg, local_rank, world_size, distributed, logger):
                                                                 2 ** lod2batch.get_lod_power2(),
                                                                 len(dataset) * world_size))
 
-        # dataset.switch_fold(local_rank, lod2batch.lod)
-        # shuffle_ndarray(dataset.data_train)
-
-
-        # batches = batch_provider(dataset, lod2batch.get_per_GPU_batch_size(), BatchCollator(local_rank), worker_count=4,
-        #                          queue_size=8, report_progress=True)
 
         dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
-        batches = db.data_loader(iter(dataset), BatchCollator(local_rank), len(dataset) // lod2batch.get_per_GPU_batch_size())
+        batches = make_dataloader(cfg, logger, dataset, lod2batch.get_per_GPU_batch_size(), local_rank)
+
         scheduler.set_batch_size(32)
 
         model.train()

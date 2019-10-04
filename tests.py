@@ -6,7 +6,7 @@ from torch import nn
 import logging
 import os
 import copy
-from dataloader import TFRecordsDataset
+from dataloader import TFRecordsDataset, make_dataloader
 import pickle
 
 
@@ -96,25 +96,79 @@ class CheckpointerTest(unittest.TestCase):
 
             for i in list(dataset1):
                 for img in i[0]:
-                    assert pickle.dumps(img) not in dataset
-                    dataset.add(pickle.dumps(img))
+                    assert img.tobytes() not in dataset
+                    dataset.add(img.tobytes())
 
             for i in list(dataset2):
                 for img in i[0]:
-                    assert pickle.dumps(img) not in dataset
-                    dataset.add(pickle.dumps(img))
+                    assert img.tobytes() not in dataset
+                    dataset.add(img.tobytes())
 
             for i in list(dataset3):
                 for img in i[0]:
-                    assert pickle.dumps(img) not in dataset
-                    dataset.add(pickle.dumps(img))
+                    assert img.tobytes() not in dataset
+                    dataset.add(img.tobytes())
 
             for i in list(dataset4):
                 for img in i[0]:
-                    assert pickle.dumps(img) not in dataset
-                    dataset.add(pickle.dumps(img))
+                    assert img.tobytes() not in dataset
+                    dataset.add(img.tobytes())
 
             self.assertTrue(len(dataset) == 70000)
+
+    def test_tf_record_reading2(self):
+        cfg = Cfg()
+        logger = logging.getLogger("logger")
+        dataset1 = TFRecordsDataset(cfg, logger, rank=0, world_size=2, buffer_size_mb=1024)
+        dataset2 = TFRecordsDataset(cfg, logger, rank=1, world_size=2, buffer_size_mb=1024)
+
+        torch.cuda.init()
+
+        for r, b in [(2, 32), (3, 64)]:
+            dataset1.reset(2, 32)
+            dataset2.reset(2, 32)
+
+            l1 = make_dataloader(cfg, logger, dataset1, 32, 0)
+            l2 = make_dataloader(cfg, logger, dataset2, 32, 1)
+
+            dataset = set()
+
+            for i in list(l1):
+                for img in i:
+                    b = img.cpu().detach().numpy().tobytes()
+                    assert b not in dataset
+                    dataset.add(b)
+
+            for i in list(l2):
+                for img in i:
+                    b = img.cpu().detach().numpy().tobytes()
+                    assert b not in dataset
+                    dataset.add(b)
+
+            self.assertTrue(len(dataset) == 70000)
+
+            ordering = dict()
+            dataset1.reset(2, 32)
+            l1 = make_dataloader(cfg, logger, dataset1, 32, 0)
+
+            k = 0
+            for i in list(l1):
+                for img in i:
+                    b = img.cpu().detach().numpy().tobytes()
+                    ordering[b] = k
+                    k += 1
+
+            dataset1.reset(2, 32)
+            l1 = make_dataloader(cfg, logger, dataset1, 32, 0)
+
+            k = 0
+            for i in list(l1):
+                for img in i:
+                    b = img.cpu().detach().numpy().tobytes()
+                    print(ordering[b])
+                    k += 1
+                    if k > 100:
+                        break
 
 
 if __name__ == '__main__':
