@@ -6,6 +6,8 @@ from torch import nn
 import logging
 import os
 import copy
+from dataloader import TFRecordsDataset
+import pickle
 
 
 class DummyNetwork(nn.Module):
@@ -20,6 +22,12 @@ class DummyNetwork(nn.Module):
 class Cfg:
     def __init__(self):
         self.OUTPUT_DIR = tempfile.mkdtemp()
+        self.DATASET  = lambda: None
+        self.DATASET.SIZE = 70000
+        self.DATASET.PART_COUNT = 16
+        self.DATASET.FFHQ_SOURCE = '/data/datasets/ffhq-dataset/tfrecords/ffhq/ffhq-r%02d.tfrecords'
+        self.DATASET.PATH = '/data/datasets/ffhq-dataset/tfrecords/ffhq/splitted/ffhq-r%02d.tfrecords.%03d'
+        self.DATASET.MAX_RESOLUTION_LEVEL = 10
 
 
 class CheckpointerTest(unittest.TestCase):
@@ -70,6 +78,43 @@ class CheckpointerTest(unittest.TestCase):
         ch = checkpointer.Checkpointer(cfg, {'dummynet': model}, logger=logger)
         ch.load(file_name=os.path.join(cfg.OUTPUT_DIR, "model.pth"))
         self.assertTrue(torch.all(list(tmp.parameters())[0] == list(model.parameters())[0]))
+
+    def test_tf_record_reading(self):
+        cfg = Cfg()
+        logger = logging.getLogger("logger")
+        dataset1 = TFRecordsDataset(cfg, logger, rank=0, world_size=4, buffer_size_mb=1)
+        dataset2 = TFRecordsDataset(cfg, logger, rank=1, world_size=4, buffer_size_mb=1)
+        dataset3 = TFRecordsDataset(cfg, logger, rank=2, world_size=4, buffer_size_mb=1)
+        dataset4 = TFRecordsDataset(cfg, logger, rank=3, world_size=4, buffer_size_mb=1)
+
+        for r, b in [(2, 32), (3, 64)]:
+            dataset1.reset(2, 32)
+            dataset2.reset(2, 32)
+            dataset3.reset(2, 32)
+            dataset4.reset(2, 32)
+            dataset = set()
+
+            for i in list(dataset1):
+                for img in i[0]:
+                    assert pickle.dumps(img) not in dataset
+                    dataset.add(pickle.dumps(img))
+
+            for i in list(dataset2):
+                for img in i[0]:
+                    assert pickle.dumps(img) not in dataset
+                    dataset.add(pickle.dumps(img))
+
+            for i in list(dataset3):
+                for img in i[0]:
+                    assert pickle.dumps(img) not in dataset
+                    dataset.add(pickle.dumps(img))
+
+            for i in list(dataset4):
+                for img in i[0]:
+                    assert pickle.dumps(img) not in dataset
+                    dataset.add(pickle.dumps(img))
+
+            self.assertTrue(len(dataset) == 70000)
 
 
 if __name__ == '__main__':

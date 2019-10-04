@@ -24,7 +24,7 @@ from dlutils.pytorch import count_parameters, millify
 import lreq as ln
 
 
-if os.environ.get('EXPORT_ONNX', 'False') == 'True':
+if False:
     def lerp(s, e, x):
         return s + (e-s) * x
 
@@ -152,7 +152,7 @@ class DecodeBlock(nn.Module):
             x = self.conv_1(x)
             x = self.blur(x)
 
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([(x.shape[0]), 1, (x.shape[2]), (x.shape[3])]))
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
 
         x = x + self.bias_1
 
@@ -164,7 +164,7 @@ class DecodeBlock(nn.Module):
 
         x = self.conv_2(x)
 
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([(x.shape[0]), 1, (x.shape[2]), (x.shape[3])]))
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
 
         x = x + self.bias_2
 
@@ -224,9 +224,6 @@ class Discriminator(nn.Module):
 
             block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1, fused_scale=fused_scale)
 
-            # if not (i == self.layer_count - 1):
-            #     block = torch.jit.trace(block, (torch.zeros(1, inputs, resolution, resolution)))
-
             resolution //= 2
 
             print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
@@ -264,7 +261,6 @@ class Discriminator(nn.Module):
         return self.fc2(x)
 
     def forward(self, x, lod, blend):
-        # with torch.jit.optimized_execution(True):
         if blend == 1:
             return self.encode(x, lod)
         else:
@@ -301,8 +297,6 @@ class Generator(nn.Module):
             fused_scale = resolution * 2 >= 128
 
             block = DecodeBlock(inputs, outputs, latent_size, has_first_conv, fused_scale=fused_scale)
-
-            # block = torch.jit.trace(block, (torch.zeros(1, inputs, resolution, resolution), torch.zeros(1, latent_size), torch.zeros(1, latent_size)))
 
             resolution *= 2
             self.layer_to_resolution[i] = resolution
@@ -347,7 +341,6 @@ class Generator(nn.Module):
         return x
 
     def forward(self, styles, lod, blend):
-        # with torch.jit.optimized_execution(True):
         if blend == 1:
             return self.decode(styles, lod, 1.)
         else:
