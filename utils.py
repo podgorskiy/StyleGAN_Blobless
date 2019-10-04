@@ -17,7 +17,7 @@ class AsyncCall(object):
         self.result = None
 
     def __call__(self, *args, **kwargs):
-        self.Thread = threading.Thread(target = self.run, name=self.Callable.__name__, args=args, kwargs=kwargs)
+        self.Thread = threading.Thread(target=self.run, name=self.Callable.__name__, args=args, kwargs=kwargs)
         self.Thread.start()
         return self
 
