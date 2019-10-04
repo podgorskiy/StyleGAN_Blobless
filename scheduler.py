@@ -54,7 +54,7 @@ class ComboMultiStepLR:
         self.schedulers = dict()
         for name, opt in optimizers.items():
             self.schedulers[name] = WarmupMultiStepLR(opt, **kwargs)
-        self.last_epoch = -1
+        self.last_epoch = 0
 
     def set_batch_size(self, batch_size):
         for x in self.schedulers.values():
