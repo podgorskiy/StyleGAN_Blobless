@@ -133,7 +133,7 @@ def prepare_celeba(cfg, logger):
         for x in tqdm.tqdm(celeba_folds[i]):
             imgfile = archive.open(x)
             image = center_crop(misc.imread(imgfile))
-            images.append(image)
+            images.append(image.transpose((2, 0, 1)))
 
         tfr_opt = tf.python_io.TFRecordOptions(tf.python_io.TFRecordCompressionType.NONE)
         part_path = cfg.DATASET.PATH % (2 + 5, i)
@@ -152,13 +152,13 @@ def prepare_celeba(cfg, logger):
             images_down = []
 
             for image in tqdm.tqdm(images):
-                h = image.shape[0]
-                w = image.shape[1]
-                image = torch.tensor(np.asarray(image, dtype=np.float32).transpose((2, 0, 1))).view(1, 3, h, w)
+                h = image.shape[1]
+                w = image.shape[2]
+                image = torch.tensor(np.asarray(image, dtype=np.float32)).view(1, 3, h, w)
 
-                image_down = F.avg_pool2d(image, 2, 2).clamp_(0, 255).permute(0, 2, 3, 1).to('cpu', torch.uint8)
+                image_down = F.avg_pool2d(image, 2, 2).clamp_(0, 255).to('cpu', torch.uint8)
 
-                image_down = image_down.view(w // 2, h // 2, 3).numpy()
+                image_down = image_down.view(3, h // 2, w // 2).numpy()
                 images_down.append(image_down)
 
             part_path = cfg.DATASET.PATH % (7 - j - 1, i)
