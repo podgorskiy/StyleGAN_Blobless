@@ -33,19 +33,19 @@ class Model(nn.Module):
                  truncation_psi=None, truncation_cutoff=None, style_mixing_prob=None, channels=3):
         super(Model, self).__init__()
 
-        self.generator = Generator(
-            startf=startf,
-            layer_count=layer_count,
-            maxf=maxf,
-            latent_size=latent_size,
-            channels=channels)
-
         self.mapping = Mapping(
             num_layers=2 * layer_count,
             latent_size=latent_size,
             dlatent_size=latent_size,
             mapping_fmaps=latent_size,
             mapping_layers=mapping_layers)
+
+        self.generator = Generator(
+            startf=startf,
+            layer_count=layer_count,
+            maxf=maxf,
+            latent_size=latent_size,
+            channels=channels)
 
         self.discriminator = Discriminator(
             startf=startf,
@@ -91,6 +91,7 @@ class Model(nn.Module):
 
     def forward(self, x, lod, blend_factor, d_train):
         if d_train:
+            #self.generator.requires_grad_(False)
             with torch.no_grad():
                 rec = self.generate(lod, blend_factor, count=x.shape[0])
             self.discriminator.requires_grad_(True)
@@ -100,6 +101,7 @@ class Model(nn.Module):
             loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
             return loss_d
         else:
+            #self.generator.requires_grad_(True)
             rec = self.generate(lod, blend_factor, count=x.shape[0])
             self.discriminator.requires_grad_(False)
             d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()

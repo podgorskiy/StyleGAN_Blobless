@@ -93,9 +93,16 @@ def train(cfg, local_rank, world_size, distributed, logger):
         del model_s.discriminator
         model_s.cuda(local_rank)
         model_s.eval()
+        model_s.requires_grad_(False)
 
     if distributed:
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], find_unused_parameters=True)
+        model = nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            broadcast_buffers=False,
+            bucket_cap_mb=25,
+            find_unused_parameters=True)
+        model.device_ids = None
         generator = model.module.generator
         discriminator = model.module.discriminator
         mapping = model.module.mapping
@@ -182,7 +189,6 @@ def train(cfg, local_rank, world_size, distributed, logger):
                                                                 2 ** lod2batch.get_lod_power2(),
                                                                 2 ** lod2batch.get_lod_power2(),
                                                                 len(dataset) * world_size))
-
 
         dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
         batches = make_dataloader(cfg, logger, dataset, lod2batch.get_per_GPU_batch_size(), local_rank)

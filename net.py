@@ -81,13 +81,9 @@ class DiscriminatorBlock(nn.Module):
     def __init__(self, inputs, outputs, last=False, fused_scale=True):
         super(DiscriminatorBlock, self).__init__()
         self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1, bias=False)
+        self.bias_1 = nn.Parameter(torch.Tensor(1, inputs, 1, 1))
         self.blur = Blur(inputs)
         self.last = last
-        self.bias_1 = nn.Parameter(torch.Tensor(1, inputs, 1, 1))
-        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-        with torch.no_grad():
-            self.bias_1.zero_()
-            self.bias_2.zero_()
         self.fused_scale = fused_scale
         if last:
             self.dense = ln.Linear(inputs * 4 * 4, outputs)
@@ -96,6 +92,12 @@ class DiscriminatorBlock(nn.Module):
                 self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1, bias=False, transform_kernel=True)
             else:
                 self.conv_2 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
+
+        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
+
+        with torch.no_grad():
+            self.bias_1.zero_()
+            self.bias_2.zero_()
 
     def forward(self, x):
         if self.last:
@@ -129,21 +131,23 @@ class DecodeBlock(nn.Module):
             else:
                 self.conv_1 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
 
-        self.bias_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-        with torch.no_grad():
-            self.bias_1.zero_()
-            self.bias_2.zero_()
+        self.blur = Blur(outputs)
         self.noise_weight_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_1.data.zero_()
+        self.bias_1 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.instance_norm_1 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
+        self.style_1 = ln.Linear(latent_size, 2 * outputs, gain=1)
+
         self.conv_2 = ln.Conv2d(outputs, outputs, 3, 1, 1, bias=False)
         self.noise_weight_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.noise_weight_2.data.zero_()
+        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
         self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
-        self.style_1 = ln.Linear(latent_size, 2 * outputs, gain=1)
         self.style_2 = ln.Linear(latent_size, 2 * outputs, gain=1)
-        self.blur = Blur(outputs)
+
+        with torch.no_grad():
+            self.bias_1.zero_()
+            self.bias_2.zero_()
 
     def forward(self, x, s1, s2):
         if self.has_first_conv:
@@ -274,24 +278,25 @@ class Generator(nn.Module):
         self.startf = startf
         self.layer_count = layer_count
 
-        self.to_rgb = nn.ModuleList()
         self.channels = channels
         self.latent_size = latent_size
 
         mul = 2**(self.layer_count-1)
+
+        inputs = min(self.maxf, startf * mul)
+        self.const = Parameter(torch.Tensor(1, inputs, 4, 4))
+        init.ones_(self.const)
 
         self.layer_to_resolution = [0 for _ in range(layer_count)]
         resolution = 2
 
         self.style_sizes = []
 
-        inputs = min(self.maxf, startf * mul)
+        to_rgb = nn.ModuleList()
 
         self.decode_block: nn.ModuleList[DecodeBlock] = nn.ModuleList()
         for i in range(self.layer_count):
             outputs = min(self.maxf, startf * mul)
-            if i == 0:
-                const_size = outputs
 
             has_first_conv = i != 0
             fused_scale = resolution * 2 >= 128
@@ -303,15 +308,14 @@ class Generator(nn.Module):
 
             self.style_sizes += [2 * (inputs if has_first_conv else outputs), 2 * outputs]
 
-            self.to_rgb.append(ToRGB(outputs, channels))
+            to_rgb.append(ToRGB(outputs, channels))
 
             print("decode_block%d %s styles in: %dl out resolution: %d" % ((i + 1), millify(count_parameters(block)), outputs, resolution))
             self.decode_block.append(block)
             inputs = outputs
             mul //= 2
 
-        self.const = Parameter(torch.Tensor(1, const_size, 4, 4))
-        init.ones_(self.const)
+        self.to_rgb = to_rgb
 
     def decode(self, styles, lod, noise):
         x = self.const
