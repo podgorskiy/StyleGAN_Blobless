@@ -13,7 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 
-import os
 import torch.utils.data
 from torch import optim
 from torchvision.utils import save_image
@@ -30,6 +29,8 @@ from checkpointer import Checkpointer
 from scheduler import ComboMultiStepLR
 from custom_adam import LREQAdam
 from tqdm import tqdm
+from launcher import run
+from defaults import get_cfg_defaults
 
 
 torch.backends.cudnn.benchmark = True
@@ -66,7 +67,7 @@ def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator
         save_pic(x, x_rec)
 
 
-def train(cfg, local_rank, world_size, distributed, logger):
+def train(cfg, logger, local_rank, world_size, distributed):
     torch.cuda.set_device(local_rank)
     model = Model(
         startf=cfg.MODEL.START_CHANNEL_COUNT,
@@ -252,3 +253,9 @@ def train(cfg, local_rank, world_size, distributed, logger):
     if local_rank == 0:
         checkpointer.save("model_final")
 
+
+if __name__ == "__main__":
+    gpu_count = torch.cuda.device_count()
+    # import os
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    run(train, gpu_count, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_celeba.yaml')

@@ -91,7 +91,6 @@ class Model(nn.Module):
 
     def forward(self, x, lod, blend_factor, d_train):
         if d_train:
-            #self.generator.requires_grad_(False)
             with torch.no_grad():
                 rec = self.generate(lod, blend_factor, count=x.shape[0])
             self.discriminator.requires_grad_(True)
@@ -101,7 +100,6 @@ class Model(nn.Module):
             loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
             return loss_d
         else:
-            #self.generator.requires_grad_(True)
             rec = self.generate(lod, blend_factor, count=x.shape[0])
             self.discriminator.requires_grad_(False)
             d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()
