@@ -96,20 +96,13 @@ def train(cfg, local_rank, world_size, distributed, logger):
         model_s.requires_grad_(False)
 
     if distributed:
-        try:
-            import apex
-            logger.info("\n\n%s\n Using APEX for distributed training\n%s" % ("#" * 80, "#" * 80))
-
-            model = apex.parallel.DistributedDataParallel(model)
-        except ModuleNotFoundError:
-            logger.info("\n\n%s\n APEX was not found! Using torch for distributed training\n%s" % ("#" * 80, "#" * 80))
-            model = nn.parallel.DistributedDataParallel(
-                model,
-                device_ids=[local_rank],
-                broadcast_buffers=False,
-                bucket_cap_mb=25,
-                find_unused_parameters=True)
-            model.device_ids = None
+        model = nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            broadcast_buffers=False,
+            bucket_cap_mb=25,
+            find_unused_parameters=True)
+        model.device_ids = None
 
         generator = model.module.generator
         discriminator = model.module.discriminator
