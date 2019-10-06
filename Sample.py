@@ -24,7 +24,6 @@ import pickle
 import time
 import random
 import os
-from dataloader import PickleDataset, BatchCollator
 from model import Model
 from net import *
 from tracker import LossTracker
@@ -39,6 +38,9 @@ import argparse
 import logging
 import sys
 import bimpy
+import lreq
+
+lreq.use_implicit_lreq.set(False)
 
 im_size = 128
 

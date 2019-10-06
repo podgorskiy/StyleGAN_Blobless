@@ -60,7 +60,7 @@ class Model(nn.Module):
         self.style_mixing_prob = style_mixing_prob
         self.truncation_cutoff = truncation_cutoff
 
-    def generate(self, lod, blend_factor, z=None, count=32):
+    def generate(self, lod, blend_factor, z=None, count=32, wl=1):
         if z is None:
             z = torch.randn(count, self.latent_size)
         styles = self.mapping(z)
@@ -86,7 +86,7 @@ class Model(nn.Module):
             coefs = torch.where(layer_idx < self.truncation_cutoff, self.truncation_psi * ones, ones)
             styles = torch.lerp(self.dlatent_avg.buff.data, styles, coefs)
 
-        rec = self.generator.forward(styles, lod, blend_factor)
+        rec = self.generator.forward(styles, lod, blend_factor, wl=wl)
         return rec
 
     def forward(self, x, lod, blend_factor, d_train):

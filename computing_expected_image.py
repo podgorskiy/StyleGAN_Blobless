@@ -27,8 +27,11 @@ from defaults import get_cfg_defaults
 import argparse
 import logging
 import sys
+import lreq
 
 im_size = 128
+
+lreq.use_implicit_lreq.set(False)
 
 
 def sample(cfg, logger):
