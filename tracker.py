@@ -18,6 +18,7 @@ from collections import OrderedDict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import os
 
 
 class RunningMean:
@@ -56,10 +57,11 @@ class RunningMeanTorch:
 
 
 class LossTracker:
-    def __init__(self):
+    def __init__(self, output_folder='.'):
         self.tracks = OrderedDict()
         self.epochs = []
         self.means_over_epochs = OrderedDict()
+        self.output_folder = output_folder
 
     def update(self, d):
         for k, v in d.items():
@@ -83,7 +85,7 @@ class LossTracker:
             self.means_over_epochs[key].append(value.mean())
             value.reset()
 
-        with open('log.csv', mode='w') as csv_file:
+        with open(os.path.join(self.output_folder, 'log.csv'), mode='w') as csv_file:
             fieldnames = ['epoch'] + list(self.tracks.keys())
             writer = csv.writer(csv_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
             writer.writerow(fieldnames)
@@ -108,5 +110,5 @@ class LossTracker:
         plt.grid(True)
         plt.tight_layout()
 
-        plt.savefig('plot.png')
+        plt.savefig(os.path.join(self.output_folder, 'plot.png'))
         plt.close()
