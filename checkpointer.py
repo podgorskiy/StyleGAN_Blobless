@@ -48,7 +48,6 @@ class Checkpointer(object):
             return
         data = dict()
         data["models"] = dict()
-        data["optimizers"] = dict()
         data["auxiliary"] = dict()
         for name, model in self.models.items():
             data["models"][name] = get_model_dict(model)
