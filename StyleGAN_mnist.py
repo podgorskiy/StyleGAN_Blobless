@@ -275,6 +275,7 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
 if __name__ == "__main__":
     import os
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     gpu_count = torch.cuda.device_count()
-    run(train, gpu_count, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_mnist.yaml')
+    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_mnist.yaml',
+        world_size=gpu_count)

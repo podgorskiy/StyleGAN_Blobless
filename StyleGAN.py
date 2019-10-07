@@ -258,4 +258,5 @@ if __name__ == "__main__":
     gpu_count = torch.cuda.device_count()
     # import os
     # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    run(train, gpu_count, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_celeba_tiny.yaml')
+    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_celeba_tiny.yaml',
+        world_size=gpu_count)

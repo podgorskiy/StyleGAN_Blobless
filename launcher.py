@@ -20,6 +20,7 @@ import logging
 import torch
 import torch.multiprocessing as mp
 from torch import distributed
+import inspect
 
 
 def setup(rank, world_size):
@@ -32,10 +33,11 @@ def cleanup():
     distributed.destroy_process_group()
 
 
-def _run(rank, world_size, fn, defaults, args):
+def _run(rank, world_size, fn, defaults, write_log, no_cuda, args):
     if world_size > 1:
         setup(rank, world_size)
-    torch.cuda.set_device(rank)
+    if not no_cuda:
+        torch.cuda.set_device(rank)
 
     cfg = defaults
     cfg.merge_from_file(args.config_file)
@@ -55,14 +57,15 @@ def _run(rank, world_size, fn, defaults, args):
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
-        fh = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
-        fh.setLevel(logging.DEBUG)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
+        if write_log:
+            fh = logging.FileHandler(os.path.join(output_dir, 'log.txt'))
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
 
     logger.info(args)
 
-    logger.info("Using {} GPUs".format(world_size))
+    logger.info("World size: {}".format(world_size))
 
     logger.info("Loaded configuration file {}".format(args.config_file))
     with open(args.config_file, "r") as cf:
@@ -70,15 +73,22 @@ def _run(rank, world_size, fn, defaults, args):
         logger.info(config_str)
     logger.info("Running with config:\n{}".format(cfg))
 
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
-    device = torch.cuda.current_device()
-    print("Running on ", torch.cuda.get_device_name(device))
+    if not no_cuda:
+        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        device = torch.cuda.current_device()
+        print("Running on ", torch.cuda.get_device_name(device))
 
     args.distributed = world_size > 1
-    fn(cfg, logger, rank, world_size, args.distributed)
+    args_to_pass = dict(cfg=cfg, logger=logger, local_rank=rank, world_size=world_size, distributed=args.distributed)
+    signature = inspect.signature(fn)
+    matching_args = {}
+    for key in args_to_pass.keys():
+        if key in signature.parameters.keys():
+            matching_args[key] = args_to_pass[key]
+    fn(**matching_args)
 
 
-def run(fn, world_size, defaults, description='', default_config='configs/experiment.yaml'):
+def run(fn, defaults, description='', default_config='configs/experiment.yaml', world_size=1, write_log=True, no_cuda=False):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--config-file",
@@ -96,8 +106,7 @@ def run(fn, world_size, defaults, description='', default_config='configs/experi
 
     import multiprocessing
     cpu_count = multiprocessing.cpu_count()
-    gpu_count = torch.cuda.device_count()
-    os.environ["OMP_NUM_THREADS"] = str(max(1, int(cpu_count / gpu_count)))
+    os.environ["OMP_NUM_THREADS"] = str(max(1, int(cpu_count / world_size)))
     del multiprocessing
 
     args = parser.parse_args()
@@ -105,11 +114,11 @@ def run(fn, world_size, defaults, description='', default_config='configs/experi
     try:
         if world_size > 1:
             mp.spawn(_run,
-                     args=(world_size, fn, defaults, args),
+                     args=(world_size, fn, defaults, write_log, no_cuda, args),
                      nprocs=world_size,
                      join=True)
         else:
-            _run(0, world_size, fn, defaults, args)
+            _run(0, world_size, fn, defaults, write_log, no_cuda, args)
     finally:
         if world_size > 1:
             cleanup()
