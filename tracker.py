@@ -112,3 +112,16 @@ class LossTracker:
 
         plt.savefig(os.path.join(self.output_folder, 'plot.png'))
         plt.close()
+
+    def state_dict(self):
+        return {
+            'tracks': self.tracks,
+            'epochs': self.epochs,
+            'means_over_epochs': self.means_over_epochs,
+            'output_folder': self.output_folder}
+
+    def load_state_dict(self, state_dict):
+        self.tracks = state_dict['tracks']
+        self.epochs = state_dict['epochs']
+        self.means_over_epochs = state_dict['means_over_epochs']
+        self.output_folder = state_dict['output_folder']

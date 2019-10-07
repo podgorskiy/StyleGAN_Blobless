@@ -100,7 +100,8 @@ class Checkpointer(object):
         if "optimizers" in checkpoint and self.optimizer:
             self.logger.info("Loading optimizer from {}".format(f))
             for name, optimizer in self.optimizer.items():
-                self.optimizer[name].load_state_dict(checkpoint["optimizers"].pop(name))
+                if name in checkpoint["optimizers"]:
+                    self.optimizer[name].load_state_dict(checkpoint["optimizers"].pop(name))
         checkpoint.pop('optimizers')
         if "scheduler" in checkpoint and self.scheduler:
             self.logger.info("Loading scheduler from {}".format(f))

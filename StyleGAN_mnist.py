@@ -31,7 +31,9 @@ from custom_adam import LREQAdam
 from tqdm import tqdm
 from launcher import run
 from defaults import get_cfg_defaults
-
+import dlutils.download
+import dlutils.batch_provider
+import dlutils.reader
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -77,7 +79,7 @@ def train(cfg, logger, local_rank, world_size, distributed):
         dlatent_avg_beta=cfg.MODEL.DLATENT_AVG_BETA,
         style_mixing_prob=cfg.MODEL.STYLE_MIXING_PROB,
         mapping_layers=cfg.MODEL.MAPPING_LAYERS,
-        channels=3)
+        channels=1)
     model.cuda(local_rank)
     model.train()
 
@@ -90,7 +92,7 @@ def train(cfg, logger, local_rank, world_size, distributed):
             truncation_psi=cfg.MODEL.TRUNCATIOM_PSI,
             truncation_cutoff=cfg.MODEL.TRUNCATIOM_CUTOFF,
             mapping_layers=cfg.MODEL.MAPPING_LAYERS,
-            channels=3)
+            channels=1)
         del model_s.discriminator
         model_s.cuda(local_rank)
         model_s.eval()
@@ -155,11 +157,14 @@ def train(cfg, logger, local_rank, world_size, distributed):
         model_dict['generator_s'] = model_s.generator
         model_dict['mapping_s'] = model_s.mapping
 
+    tracker = LossTracker(cfg.OUTPUT_DIR)
+
     checkpointer = Checkpointer(cfg,
                                 model_dict,
                                 {
                                     'generator_optimizer': generator_optimizer,
-                                    'discriminator_optimizer': discriminator_optimizer
+                                    'discriminator_optimizer': discriminator_optimizer,
+                                    'tracker': tracker
                                 },
                                 scheduler=scheduler,
                                 logger=logger,
@@ -171,15 +176,15 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
     layer_to_resolution = generator.layer_to_resolution
 
-    dataset = TFRecordsDataset(cfg, logger, rank=local_rank, world_size=world_size, buffer_size_mb=1024)
+    dlutils.download.mnist()
+    mnist = dlutils.reader.Mnist('mnist').items
+    mnist = np.asarray([x[1] for x in mnist], np.float32)
 
     rnd = np.random.RandomState(3456)
     latents = rnd.randn(32, cfg.MODEL.LATENT_SPACE_SIZE)
     sample = torch.tensor(latents).float().cuda()
 
-    lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(dataset) * world_size)
-
-    tracker = LossTracker(cfg.OUTPUT_DIR)
+    lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(mnist))
 
     for epoch in range(scheduler.start_epoch(), cfg.TRAIN.TRAIN_EPOCHS):
         model.train()
@@ -190,16 +195,30 @@ def train(cfg, logger, local_rank, world_size, distributed):
                                                                 lod2batch.lod,
                                                                 2 ** lod2batch.get_lod_power2(),
                                                                 2 ** lod2batch.get_lod_power2(),
-                                                                len(dataset) * world_size))
+                                                                len(mnist)))
 
-        dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
-        batches = make_dataloader(cfg, logger, dataset, lod2batch.get_per_GPU_batch_size(), local_rank)
+        dlutils.shuffle.shuffle_ndarray(mnist)
+
+        r = 2 ** lod2batch.get_lod_power2()
+        mnist_ = F.interpolate(torch.tensor(mnist).view(mnist.shape[0], 1, 28, 28), r).detach().cpu().numpy()
 
         scheduler.set_batch_size(32)
 
         model.train()
 
         need_permute = False
+
+        class BatchCollator(object):
+            def __init__(self, device=torch.device("cpu")):
+                self.device = device
+
+            def __call__(self, batch):
+                with torch.no_grad():
+                    x = batch
+                    x = torch.tensor(x, requires_grad=True, device=torch.device(self.device), dtype=torch.float32)
+                    return x
+
+        batches = dlutils.batch_provider(mnist_, lod2batch.get_per_GPU_batch_size(), BatchCollator(local_rank), report_progress=False)
 
         with torch.autograd.profiler.profile(use_cuda=True, enabled=False) as prof:
             for x_orig in tqdm(batches):
@@ -251,11 +270,11 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
     logger.info("Training finish!... save training results")
     if local_rank == 0:
-        checkpointer.save("model_final").wait()
+        checkpointer.save("model_final")
 
 
 if __name__ == "__main__":
-    gpu_count = torch.cuda.device_count()
-    # import os
+    import os
     # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    run(train, gpu_count, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_celeba_tiny.yaml')
+    gpu_count = torch.cuda.device_count()
+    run(train, gpu_count, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_mnist.yaml')
