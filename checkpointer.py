@@ -36,10 +36,9 @@ def load_model(x, state_dict):
 
 
 class Checkpointer(object):
-    def __init__(self, cfg, models, optimizer=None, scheduler=None, logger=None, save=True):
+    def __init__(self, cfg, models, auxiliary=None, logger=None, save=True):
         self.models = models
-        self.optimizer = optimizer
-        self.scheduler = scheduler
+        self.auxiliary = auxiliary
         self.cfg = cfg
         self.logger = logger
         self._save = save
@@ -50,14 +49,13 @@ class Checkpointer(object):
         data = dict()
         data["models"] = dict()
         data["optimizers"] = dict()
+        data["auxiliary"] = dict()
         for name, model in self.models.items():
             data["models"][name] = get_model_dict(model)
 
-        if self.optimizer is not None:
-            for name, optimizer in self.optimizer.items():
-                data["optimizers"][name] = optimizer.state_dict()
-        if self.scheduler is not None:
-            data["scheduler"] = self.scheduler.state_dict()
+        if self.auxiliary is not None:
+            for name, item in self.auxiliary.items():
+                data["auxiliary"][name] = item.state_dict()
         data.update(kwargs)
 
         @utils.async_func
@@ -97,15 +95,16 @@ class Checkpointer(object):
             else:
                 self.logger.warning("No state dict for model: %s" % name)
         checkpoint.pop('models')
-        if "optimizers" in checkpoint and self.optimizer:
-            self.logger.info("Loading optimizer from {}".format(f))
-            for name, optimizer in self.optimizer.items():
-                if name in checkpoint["optimizers"]:
-                    self.optimizer[name].load_state_dict(checkpoint["optimizers"].pop(name))
-        checkpoint.pop('optimizers')
-        if "scheduler" in checkpoint and self.scheduler:
-            self.logger.info("Loading scheduler from {}".format(f))
-            self.scheduler.load_state_dict(checkpoint.pop("scheduler"))
+        if "auxiliary" in checkpoint and self.auxiliary:
+            self.logger.info("Loading auxiliary from {}".format(f))
+            for name, item in self.auxiliary.items():
+                if name in checkpoint["auxiliary"]:
+                    self.auxiliary[name].load_state_dict(checkpoint["auxiliary"].pop(name))
+                if "optimizers" in checkpoint and name in checkpoint["optimizers"]:
+                    self.auxiliary[name].load_state_dict(checkpoint["optimizers"].pop(name))
+                if name in checkpoint:
+                    self.auxiliary[name].load_state_dict(checkpoint.pop(name))
+            checkpoint.pop('auxiliary')
 
         return checkpoint
 

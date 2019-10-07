@@ -155,13 +155,16 @@ def train(cfg, logger, local_rank, world_size, distributed):
         model_dict['generator_s'] = model_s.generator
         model_dict['mapping_s'] = model_s.mapping
 
+    tracker = LossTracker(cfg.OUTPUT_DIR)
+
     checkpointer = Checkpointer(cfg,
                                 model_dict,
                                 {
                                     'generator_optimizer': generator_optimizer,
-                                    'discriminator_optimizer': discriminator_optimizer
+                                    'discriminator_optimizer': discriminator_optimizer,
+                                    'scheduler': scheduler,
+                                    'tracker': tracker
                                 },
-                                scheduler=scheduler,
                                 logger=logger,
                                 save=local_rank == 0)
 
@@ -178,8 +181,6 @@ def train(cfg, logger, local_rank, world_size, distributed):
     sample = torch.tensor(latents).float().cuda()
 
     lod2batch = lod_driver.LODDriver(cfg, logger, world_size, dataset_size=len(dataset) * world_size)
-
-    tracker = LossTracker(cfg.OUTPUT_DIR)
 
     for epoch in range(scheduler.start_epoch(), cfg.TRAIN.TRAIN_EPOCHS):
         model.train()

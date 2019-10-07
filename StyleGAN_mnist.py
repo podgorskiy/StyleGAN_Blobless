@@ -164,9 +164,9 @@ def train(cfg, logger, local_rank, world_size, distributed):
                                 {
                                     'generator_optimizer': generator_optimizer,
                                     'discriminator_optimizer': discriminator_optimizer,
-                                    'tracker': tracker
+                                    'tracker': tracker,
+                                    'scheduler': scheduler,
                                 },
-                                scheduler=scheduler,
                                 logger=logger,
                                 save=local_rank == 0)
 

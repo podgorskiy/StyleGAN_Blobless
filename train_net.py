@@ -116,5 +116,4 @@ if __name__ == '__main__':
     import os
     #os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     #os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    os.environ["OMP_NUM_THREADS"] = "1"
     run(train_net, torch.cuda.device_count())
