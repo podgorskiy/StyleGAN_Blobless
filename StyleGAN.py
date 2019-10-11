@@ -14,6 +14,7 @@
 # ==============================================================================
 
 import torch.utils.data
+import torch.distributed
 from torch import optim
 from torchvision.utils import save_image
 import utils
@@ -40,8 +41,9 @@ torch.backends.cudnn.enabled = True
 def save_sample(lod2batch, tracker, sample, x, logger, model, cfg, discriminator_optimizer, generator_optimizer):
     os.makedirs('results', exist_ok=True)
 
-    logger.info('\n[%d/%d] - ptime: %.2f, %s, lr: %.12f,  %.12f, max mem: %f",' % (
-        (lod2batch.current_epoch + 1), cfg.TRAIN.TRAIN_EPOCHS, lod2batch.per_epoch_ptime, str(tracker),
+    logger.info('\n[%d/%d] - ptime: %.2f, %s, blend: %.3f lr: %.12f,  %.12f, max mem: %f",' % (
+        lod2batch.current_epoch, cfg.TRAIN.TRAIN_EPOCHS, lod2batch.per_epoch_ptime, str(tracker),
+        lod2batch.get_blend_factor(),
         discriminator_optimizer.param_groups[0]['lr'],
         generator_optimizer.param_groups[0]['lr'],
         torch.cuda.max_memory_allocated() / 1024.0 / 1024.0))
@@ -123,9 +125,6 @@ def train(cfg, logger, local_rank, world_size, distributed):
     logger.info("Trainable parameters discriminator:")
     count_parameters(discriminator)
 
-    arguments = dict()
-    arguments["iteration"] = 0
-
     generator_optimizer = LREQAdam([
         {'params': generator.parameters()},
         {'params': mapping.parameters()}
@@ -142,7 +141,7 @@ def train(cfg, logger, local_rank, world_size, distributed):
                                  },
                                  milestones=cfg.TRAIN.LEARNING_DECAY_STEPS,
                                  gamma=cfg.TRAIN.LEARNING_DECAY_RATE,
-                                 reference_batch_size=32)
+                                 reference_batch_size=32, base_lr=cfg.TRAIN.LEARNING_RATES)
 
     model_dict = {
         'discriminator': discriminator,
@@ -168,9 +167,8 @@ def train(cfg, logger, local_rank, world_size, distributed):
                                 logger=logger,
                                 save=local_rank == 0)
 
-    extra_checkpoint_data = checkpointer.load()
-
-    arguments.update(extra_checkpoint_data)
+    checkpointer.load()
+    logger.info("Starting from epoch: %d" % (scheduler.start_epoch()))
 
     layer_to_resolution = generator.layer_to_resolution
 
@@ -186,17 +184,19 @@ def train(cfg, logger, local_rank, world_size, distributed):
         model.train()
         lod2batch.set_epoch(epoch, [generator_optimizer, discriminator_optimizer])
 
-        logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d - %dx%d, dataset size: %d" % (lod2batch.get_batch_size(),
+        logger.info("Batch size: %d, Batch size per GPU: %d, LOD: %d - %dx%d, blend: %.3f, dataset size: %d" % (
+                                                                lod2batch.get_batch_size(),
                                                                 lod2batch.get_per_GPU_batch_size(),
                                                                 lod2batch.lod,
                                                                 2 ** lod2batch.get_lod_power2(),
                                                                 2 ** lod2batch.get_lod_power2(),
+                                                                lod2batch.get_blend_factor(),
                                                                 len(dataset) * world_size))
 
         dataset.reset(lod2batch.get_lod_power2(), lod2batch.get_per_GPU_batch_size())
         batches = make_dataloader(cfg, logger, dataset, lod2batch.get_per_GPU_batch_size(), local_rank)
 
-        scheduler.set_batch_size(32)
+        scheduler.set_batch_size(lod2batch.get_batch_size(), lod2batch.lod)
 
         model.train()
 
@@ -204,22 +204,26 @@ def train(cfg, logger, local_rank, world_size, distributed):
 
         with torch.autograd.profiler.profile(use_cuda=True, enabled=False) as prof:
             for x_orig in tqdm(batches):
-                if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
-                    continue
-                if need_permute:
-                    x_orig = x_orig.permute(0, 3, 1, 2)
-                x_orig = (x_orig / 127.5 - 1.)
+                torch.distributed.barrier()
 
-                blend_factor = lod2batch.get_blend_factor()
+                with torch.no_grad():
+                    if x_orig.shape[0] != lod2batch.get_per_GPU_batch_size():
+                        continue
+                    if need_permute:
+                        x_orig = x_orig.permute(0, 3, 1, 2)
+                    x_orig = (x_orig / 127.5 - 1.)
 
-                needed_resolution = layer_to_resolution[lod2batch.lod]
-                x = x_orig
+                    blend_factor = lod2batch.get_blend_factor()
 
-                if lod2batch.in_transition:
-                    needed_resolution_prev = layer_to_resolution[lod2batch.lod - 1]
-                    x_prev = F.avg_pool2d(x_orig, 2, 2)
-                    x_prev_2x = F.interpolate(x_prev, needed_resolution)
-                    x = x * blend_factor + x_prev_2x * (1.0 - blend_factor)
+                    needed_resolution = layer_to_resolution[lod2batch.lod]
+                    x = x_orig
+
+                    if lod2batch.in_transition:
+                        needed_resolution_prev = layer_to_resolution[lod2batch.lod - 1]
+                        x_prev = F.avg_pool2d(x_orig, 2, 2)
+                        x_prev_2x = F.interpolate(x_prev, needed_resolution)
+                        x = x * blend_factor + x_prev_2x * (1.0 - blend_factor)
+                x.requires_grad = True
 
                 discriminator_optimizer.zero_grad()
                 loss_d = model(x, lod2batch.lod, blend_factor, d_train=True)
@@ -238,17 +242,19 @@ def train(cfg, logger, local_rank, world_size, distributed):
                 generator_optimizer.step()
 
                 lod2batch.step()
-                if local_rank == 0 and lod2batch.is_time_to_report():
-                    save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
+                if local_rank == 0:
+                    if lod2batch.is_time_to_save():
+                        checkpointer.save("model_tmp_intermediate")
+                    if lod2batch.is_time_to_report():
+                        save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
 
         #print(prof.key_averages().table(sort_by="self_cpu_time_total"))
 
-        if local_rank == 0:
-            save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
-            if epoch > 2:
-                checkpointer.save("model_tmp")
-
         scheduler.step()
+
+        if local_rank == 0:
+            checkpointer.save("model_tmp")
+            save_sample(lod2batch, tracker, sample, x, logger, model_s, cfg, discriminator_optimizer, generator_optimizer)
 
     logger.info("Training finish!... save training results")
     if local_rank == 0:
@@ -259,5 +265,5 @@ if __name__ == "__main__":
     gpu_count = torch.cuda.device_count()
     # import os
     # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_celeba_tiny.yaml',
+    run(train, get_cfg_defaults(), description='StyleGAN', default_config='configs/experiment_ffhq.yaml',
         world_size=gpu_count)

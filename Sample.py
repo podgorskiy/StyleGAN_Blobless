@@ -127,6 +127,8 @@ def sample(cfg, logger):
     #     sample = sample_a * (1.0 - x) + sample_b * x
     #     save_sample(model, sample, i)
 
+    print(model.generator.get_statistics(8))
+    # print(model.discriminator.get_statistics(8))
 
     ctx = bimpy.Context()
 
