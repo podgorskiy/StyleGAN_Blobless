@@ -19,17 +19,17 @@ import argparse
 import logging
 import torch
 from defaults import get_cfg_defaults
+import sys
+sys.path.append('stylegan')
+sys.path.append('stylegan/dnnlib')
+sys.path.append('tensor4/tensor4')
 import dnnlib
 import dnnlib.tflib
 import dnnlib.tflib as tflib
 import pickle
 from model import Model
-#import stylegan
-#import stylegan.training.networks_stylegan
 import numpy as np
 from torchvision.utils import save_image
-import PIL
-from dnnlib import EasyDict
 from checkpointer import Checkpointer
 
 
@@ -54,10 +54,9 @@ def load_from(name, cfg):
 
     Gs = m[2]
 
-    #Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
-    #D = tflib.Network('D', func_name='stylegan.training.networks_stylegan.D_basic', num_channels=3, resolution=1024)
+    Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
 
-    #Gs_.copy_vars_from(Gs)
+    Gs_.copy_vars_from(Gs)
 
     model = Model(
         startf=cfg.MODEL.START_CHANNEL_COUNT,
@@ -66,6 +65,7 @@ def load_from(name, cfg):
         latent_size=cfg.MODEL.LATENT_SPACE_SIZE,
         mapping_layers=cfg.MODEL.MAPPING_LAYERS,
         truncation_psi=0.7, #cfg.MODEL.TRUNCATIOM_PSI,
+        truncation_cutoff=cfg.MODEL.TRUNCATIOM_CUTOFF,
         channels=3)
 
     def tensor(x, transpose=None):
@@ -76,8 +76,8 @@ def load_from(name, cfg):
 
     for i in range(cfg.MODEL.MAPPING_LAYERS):
         block = getattr(model.mapping, "block_%d" % (i + 1))
-        block.fc.weight[:] = tensor('G_mapping/Dense%d/weight' % i, (1, 0))
-        block.fc.bias[:] = tensor('G_mapping/Dense%d/bias' % i)
+        block.fc.weight[:] = tensor('G_mapping/Dense%d/weight' % i, (1, 0)) * block.fc.std
+        block.fc.bias[:] = tensor('G_mapping/Dense%d/bias' % i) * block.fc.lrmul
 
     model.dlatent_avg.buff[:] = tensor('dlatent_avg')
     model.generator.const[:] = tensor('G_synthesis/4x4/Const/const')
@@ -101,58 +101,25 @@ def load_from(name, cfg):
 
         if block.has_first_conv:
             if block.fused_scale:
-                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (2, 3, 0, 1))
+                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (2, 3, 0, 1)) * block.conv_1.std
             else:
-                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (3, 2, 0, 1))
+                block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (3, 2, 0, 1)) * block.conv_1.std
 
-        block.conv_2.weight[:] = tensor('%s/weight' % prefix_2, (3, 2, 0, 1))
+        block.conv_2.weight[:] = tensor('%s/weight' % prefix_2, (3, 2, 0, 1)) * block.conv_2.std
         block.bias_1[0, :, 0, 0] = tensor('%s/bias' % prefix_1)
         block.bias_2[0, :, 0, 0] = tensor('%s/bias' % prefix_2)
-        block.style_1.weight[:] = tensor('%s/StyleMod/weight' % prefix_1, (1, 0))
+        block.style_1.weight[:] = tensor('%s/StyleMod/weight' % prefix_1, (1, 0)) * block.style_1.std
         block.style_1.bias[:] = tensor('%s/StyleMod/bias' % prefix_1)
-        block.style_2.weight[:] = tensor('%s/StyleMod/weight' % prefix_2, (1, 0))
+        block.style_2.weight[:] = tensor('%s/StyleMod/weight' % prefix_2, (1, 0)) * block.style_2.std
         block.style_2.bias[:] = tensor('%s/StyleMod/bias' % prefix_2)
 
-        model.generator.to_rgb[i].to_rgb.weight[:] = tensor('G_synthesis/ToRGB_lod%d/weight' % (j), (3, 2, 0, 1))
+        model.generator.to_rgb[i].to_rgb.weight[:] = tensor('G_synthesis/ToRGB_lod%d/weight' % (j), (3, 2, 0, 1)) * model.generator.to_rgb[i].to_rgb.std
         model.generator.to_rgb[i].to_rgb.bias[:] = tensor('G_synthesis/ToRGB_lod%d/bias' % (j))
 
-    def tensor(x, transpose=None):
-        x = m[1].vars[x].eval()
-        if transpose:
-            x = np.transpose(x, transpose)
-        return torch.tensor(x)
-
-    for i in range(model.discriminator.layer_count):
-        j = model.discriminator.layer_count - i - 1
-        prefix = '%dx%d' % (2 ** (2 + j), 2 ** (2 + j))
-        block = model.discriminator.encode_block[i]
-
-        if not block.last:
-            prefix_1 = '%s/Conv0' % prefix
-            prefix_2 = '%s/Conv1_down' % prefix
-        else:
-            prefix_1 = '%s/Conv' % prefix
-            prefix_2 = '%s/Dense0' % prefix
-
-        block.conv_1.weight[:] = tensor('%s/weight' % prefix_1, (3, 2, 0, 1))
-
-        if not block.last:
-            block.conv_2.weight[:] = tensor('%s/weight' % prefix_2, (3, 2, 0, 1))
-        else:
-            block.dense.weight[:] = tensor('%s/weight' % prefix_2, (1, 0))
-
-        block.bias_1[0, :, 0, 0] = tensor('%s/bias' % prefix_1)
-        block.bias_2[0, :, 0, 0] = tensor('%s/bias' % prefix_2)
-
-        model.discriminator.from_rgb[j].from_rgb.weight[:] = tensor('FromRGB_lod%d/weight' % (j), (3, 2, 0, 1))
-        model.discriminator.from_rgb[j].from_rgb.bias[:] = tensor('FromRGB_lod%d/bias' % (j))
-
-    model.discriminator.fc2.weight[:] = tensor('4x4/Dense1/weight', (1, 0))
-    model.discriminator.fc2.bias[:] = tensor('4x4/Dense1/bias')
-    return model #, Gs_
+    return model, Gs_
 
 
-def train_net(args):
+def convert(args):
     torch.cuda.set_device(0)
 
     cfg = get_cfg_defaults()
@@ -182,25 +149,11 @@ def train_net(args):
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    model = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
-    #model, Gs = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
-
-    # Generate image.
-    #fmt = dict(func=tflib.convert_images_to_uint8, nchw_to_nhwc=True)
-    #images = Gs.run(sample.cpu().detach().numpy(), None, truncation_psi=0.7, randomize_noise=True, output_transform=None)
-
-    rnd = np.random.RandomState(5)
-    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
-    sample = torch.tensor(latents).float().cuda()
-    save_sample(model, sample, )
-
-    #png_filename = os.path.join('example.png')
-    #PIL.Image.fromarray(images[0], 'RGB').save(png_filename)
-
+    model, Gs = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
 
     model_dict = {
         'generator_s': model.generator,
-        'mapping_s': model.mapping,
+        'mapping_fl_s': model.mapping,
         'dlatent_avg': model.dlatent_avg,
     }
 
@@ -216,7 +169,7 @@ def run():
     parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment_stylegan.yaml",
+        default="configs/experiment_ffhq.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -230,7 +183,7 @@ def run():
 
     args = parser.parse_args()
 
-    train_net(args)
+    convert(args)
 
 
 if __name__ == '__main__':

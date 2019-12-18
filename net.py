@@ -20,8 +20,10 @@ from torch.nn import functional as F
 from torch.nn import init
 from torch.nn.parameter import Parameter
 import numpy as np
-from dlutils.pytorch import count_parameters, millify
+#from dlutils.pytorch import count_parameters, millify
 import lreq as ln
+import math
+import matplotlib.pyplot as plt
 
 
 if False:
@@ -52,6 +54,7 @@ def style_mod(x, style):
 
 
 def upscale2d(x, factor=2):
+    #    return F.upsample(x, scale_factor=factor, mode='bilinear', align_corners=True)
     s = x.shape
     x = torch.reshape(x, [-1, s[1], s[2], 1, s[3], 1])
     x = x.repeat(1, 1, 1, factor, 1, factor)
@@ -118,8 +121,12 @@ class DiscriminatorBlock(nn.Module):
         return x
 
 
+def printinf(x):
+    print("MEAN %f\nSTD %f" % (x.mean(), x.std()))
+
+
 class DecodeBlock(nn.Module):
-    def __init__(self, inputs, outputs, latent_size, has_first_conv=True, fused_scale=True):
+    def __init__(self, inputs, outputs, latent_size, has_first_conv=True, fused_scale=True, layer=0):
         super(DecodeBlock, self).__init__()
         self.has_first_conv = has_first_conv
         self.inputs = inputs
@@ -145,39 +152,194 @@ class DecodeBlock(nn.Module):
         self.instance_norm_2 = nn.InstanceNorm2d(outputs, affine=False, eps=1e-8)
         self.style_2 = ln.Linear(latent_size, 2 * outputs, gain=1)
 
+        self.layer = layer
+
+        self.c = -1
+
         with torch.no_grad():
             self.bias_1.zero_()
             self.bias_2.zero_()
 
-    def forward(self, x, s1, s2):
+    def set(self, c):
+        self.c = c
+
+    def forward(self, x, _x, s1, s2):
+        if self.has_first_conv:
+            if not self.fused_scale:
+                x = upscale2d(x)
+                _x = upscale2d(_x)
+            x = self.conv_1(x)
+            _x = self.conv_1(_x)
+
+            x = self.blur(x)
+            _x = self.blur(_x)
+
+        n1 = torch.randn([int(x.shape[0]), 1, int(x.shape[2]), int(x.shape[3])])
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1,
+                          tensor2=n1)
+
+        _x = torch.addcmul(_x, value=1.0, tensor1=self.noise_weight_1,
+                          tensor2=n1)
+
+        x = x + self.bias_1
+        _x = _x + self.bias_1
+
+        x = F.leaky_relu(x, 0.2)
+        _x = F.leaky_relu(_x, 0.2)
+        #
+        # if self.c != -1:
+        #     _x[torch.abs(_x) > 10.0] = 0.0
+
+        #x = self.instance_norm_1(x)
+
+        std = x.std(axis=[2, 3], keepdim=True)
+        mean = x.mean(axis=[2, 3], keepdim=True)
+
+        x = (x - mean) / std
+        _x = (_x - mean) / std
+
+        x = style_mod(x, self.style_1(s1))
+        _x = style_mod(_x, self.style_1(s1))
+
+        # if self.c != -1:
+        #     _x[_x > 300.0] = 0
+
+        x = self.conv_2(x)
+        _x = self.conv_2(_x)
+
+        n2 = torch.randn([int(x.shape[0]), 1, int(x.shape[2]), int(x.shape[3])])
+
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2,
+                          tensor2=n2)
+
+        _x = torch.addcmul(_x, value=1.0, tensor1=self.noise_weight_2,
+                          tensor2=n2)
+
+        # if self.c != -1:
+        #     __x = -F.max_pool2d(-torch.abs(_x), 3, 1, padding=1)
+        #     _x[torch.abs(_x - __x) > 200] = 0.0
+
+        x = x + self.bias_2
+        _x = _x + self.bias_2
+
+        x = F.leaky_relu(x, 0.2)
+        _x = F.leaky_relu(_x, 0.2)
+
+        #if self.c != -1:
+        std = x.std(axis=[2, 3], keepdim=True)
+        mean = x.mean(axis=[2, 3], keepdim=True)
+
+        x = (x - mean) / std
+        _x = (_x - mean) / std
+        #x = self.instance_norm_2(x)
+
+        x = style_mod(x, self.style_2(s2))
+        _x = style_mod(_x, self.style_2(s2))
+
+        if self.c != -1:
+            _x[x > 200.0] = 0
+            #plt.hist((torch.max(torch.max(_x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
+            #plt.show()
+            #exit()
+
+        #
+        # if self.c != -1:
+        #     _x[torch.abs(_x) > 200.0] = 0.0
+
+        return x, _x
+
+    def nforward(self, x, s1, s2):
         if self.has_first_conv:
             if not self.fused_scale:
                 x = upscale2d(x)
             x = self.conv_1(x)
             x = self.blur(x)
 
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
-
         x = x + self.bias_1
 
         x = F.leaky_relu(x, 0.2)
 
         x = self.instance_norm_1(x)
-        
+
         x = style_mod(x, self.style_1(s1))
 
         x = self.conv_2(x)
-
-        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
 
         x = x + self.bias_2
 
         x = F.leaky_relu(x, 0.2)
         x = self.instance_norm_2(x)
-        
+
         x = style_mod(x, self.style_2(s2))
 
         return x
+
+    def eforward(self, x, d, s1, s2):
+        if self.has_first_conv:
+            if not self.fused_scale:
+                x = upscale2d(x)
+            #d = upscale2d(d)
+            x = self.conv_1(x)
+            #w = torch.abs(torch.det(self.conv_1.weight.view(self.conv_1.weight.shape[0], -1)))
+            #d = d * w
+            #d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), w)) * self.conv_1.std
+            #d = d[..., None, None]
+            # d = self.conv_1(d)
+            x = self.blur(x)
+            #d = self.blur(d)
+
+        # x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+        d = torch.sqrt(d*d + 1)
+
+        x = x + self.bias_1
+
+        x = F.leaky_relu(x, 0.2)
+
+        s = math.pow(self.layer + 1, 0.5)
+        print(s)
+        x += s * torch.exp(-x * x / (2.0 * s * s)) / math.sqrt(2 * math.pi) * 0.8
+
+        #xs = x.std(dim=[2, 3], keepdim=True)
+        #d = d / xs
+
+        x = self.instance_norm_1(x)
+
+        x = style_mod(x, self.style_1(s1))
+
+        #s = self.style_1(s1)
+        #s = s.view(s.shape[0], 2, x.shape[1], 1, 1)
+        #d = d * torch.abs(s[:, 0] + 1)
+
+        x = self.conv_2(x)
+        # d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), torch.transpose(self.conv_2.weight.sum(dim=[2, 3]), 0, 1))) * self.conv_2.std
+        #w = torch.abs(torch.det(self.conv_2.weight.view(self.conv_2.weight.shape[0], -1)))
+        #d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), w)) * self.conv_2.std
+        #d = d[..., None, None]
+        # d = self.conv_2(d)
+        #d = d * w
+        # x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+        d = torch.sqrt(d*d + 1)
+
+        x = x + self.bias_2
+
+        x = F.leaky_relu(x, 0.2)
+
+        s = math.pow(self.layer + 1, 0.5)
+        print(s)
+        x += s * torch.exp(-x * x / (2.0 * s * s)) / math.sqrt(2 * math.pi) * 0.8
+
+        #xs = x.std(dim=[2, 3], keepdim=True)
+        #d = d / xs
+
+        x = self.instance_norm_2(x)
+        
+        x = style_mod(x, self.style_2(s2))
+
+        #s = self.style_1(s1)
+        #s = s.view(s.shape[0], 2, x.shape[1], 1, 1)
+        #d = d * torch.abs(s[:, 0] + 1)
+
+        return x, d
 
 
 class FromRGB(nn.Module):
@@ -230,7 +392,7 @@ class Discriminator(nn.Module):
 
             resolution //= 2
 
-            print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
+            #print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
             self.encode_block.append(block)
             inputs = outputs
             mul *= 2
@@ -270,6 +432,19 @@ class Discriminator(nn.Module):
         else:
             return self.encode2(x, lod, blend)
 
+    def get_statistics(self, lod):
+        rgb_std = self.from_rgb[self.layer_count - lod - 1].from_rgb.weight.std().item()
+        rgb_std_c = self.from_rgb[self.layer_count - lod - 1].from_rgb.std
+
+        layers = []
+        for i in range(self.layer_count - lod - 1, self.layer_count):
+            conv_1 = self.encode_block[i].conv_1.weight.std().item()
+            conv_1_c = self.encode_block[i].conv_1.std
+            conv_2 = self.encode_block[i].conv_2.weight.std().item()
+            conv_2_c = self.encode_block[i].conv_2.std
+            layers.append(((conv_1 / conv_1_c), (conv_2 / conv_2_c)))
+        return rgb_std / rgb_std_c, layers
+
 
 class Generator(nn.Module):
     def __init__(self, startf=32, maxf=256, layer_count=3, latent_size=128, channels=3):
@@ -285,6 +460,7 @@ class Generator(nn.Module):
 
         inputs = min(self.maxf, startf * mul)
         self.const = Parameter(torch.Tensor(1, inputs, 4, 4))
+        self.zeros = torch.zeros(1, 1, 1, 1)
         init.ones_(self.const)
 
         self.layer_to_resolution = [0 for _ in range(layer_count)]
@@ -301,7 +477,7 @@ class Generator(nn.Module):
             has_first_conv = i != 0
             fused_scale = resolution * 2 >= 128
 
-            block = DecodeBlock(inputs, outputs, latent_size, has_first_conv, fused_scale=fused_scale)
+            block = DecodeBlock(inputs, outputs, latent_size, has_first_conv, fused_scale=fused_scale, layer=i)
 
             resolution *= 2
             self.layer_to_resolution[i] = resolution
@@ -310,18 +486,60 @@ class Generator(nn.Module):
 
             to_rgb.append(ToRGB(outputs, channels))
 
-            print("decode_block%d %s styles in: %dl out resolution: %d" % ((i + 1), millify(count_parameters(block)), outputs, resolution))
+            #print("decode_block%d %s styles in: %dl out resolution: %d" % ((i + 1), millify(count_parameters(block)), outputs, resolution))
             self.decode_block.append(block)
             inputs = outputs
             mul //= 2
 
         self.to_rgb = to_rgb
 
+    def set(self, l, c):
+        for b in self.decode_block:
+            b.set(-1)
+        self.decode_block[l].set(c)
+
+    def decode_full(self, styles, lod, noise):
+        x = self.const
+
+        images = []
+
+        for i in range(lod + 1):
+            x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+            im = self.to_rgb[i](x)
+            images.append(im)
+        return images
+
+    def edecode(self, styles, lod, noise):
+        x = self.const
+        d = self.zeros
+
+        for i in range(lod + 1):
+            x, d = self.decode_block[i].eforward(x, d, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+
+        x = self.to_rgb[lod](x)
+        return x
+
     def decode(self, styles, lod, noise):
+        x = self.const
+        _x = self.const
+
+        for i in range(lod + 1):
+            setattr(self, "decode_block_%d" % (i + 1), self.decode_block[i])
+
+        for i in range(lod + 1):
+            #x = self.decode_block[i](x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+
+            x, _x = getattr(self, "decode_block_%d" % (i + 1))(x, _x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+
+        x = self.to_rgb[lod](x)
+        _x = self.to_rgb[lod](_x)
+        return _x
+
+    def ndecode(self, styles, lod, noise):
         x = self.const
 
         for i in range(lod + 1):
-            x = self.decode_block[i](x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+            x = self.decode_block[i].nforward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
 
         x = self.to_rgb[lod](x)
         return x
@@ -349,6 +567,28 @@ class Generator(nn.Module):
             return self.decode(styles, lod, 1.)
         else:
             return self.decode2(styles, lod, blend, 1.)
+
+    def eforward(self, styles, lod, blend):
+        return self.edecode(styles, lod, 1.)
+
+    def nforward(self, styles, lod, blend):
+        return self.ndecode(styles, lod, 1.)
+
+    def get_statistics(self, lod):
+        rgb_std = self.to_rgb[lod].to_rgb.weight.std().item()
+        rgb_std_c = self.to_rgb[lod].to_rgb.std if self.to_rgb[lod].to_rgb.implicit_lreq else 1
+
+        layers = []
+        for i in range(lod + 1):
+            conv_1 = 1.0
+            conv_1_c = 1.0
+            if i != 0:
+                conv_1 = self.decode_block[i].conv_1.weight.std().item()
+                conv_1_c = self.decode_block[i].conv_1.std if self.decode_block[i].conv_1.implicit_lreq else 1
+            conv_2 = self.decode_block[i].conv_2.weight.std().item()
+            conv_2_c = self.decode_block[i].conv_2.std if self.decode_block[i].conv_2.implicit_lreq else 1
+            layers.append(((conv_1 / conv_1_c), (conv_2 / conv_2_c)))
+        return rgb_std / rgb_std_c, layers
 
 
 def minibatch_stddev_layer(x, group_size=4):
@@ -384,7 +624,7 @@ class Mapping(nn.Module):
             block = MappingBlock(inputs, outputs, lrmul=0.01)
             inputs = outputs
             setattr(self, "block_%d" % (i + 1), block)
-            print("dense %d %s" % ((i + 1), millify(count_parameters(block))))
+            #print("dense %d %s" % ((i + 1), millify(count_parameters(block))))
 
     def forward(self, z):
         x = pixel_norm(z)

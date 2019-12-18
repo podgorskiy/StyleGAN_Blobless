@@ -26,9 +26,7 @@ import random
 import os
 from model import Model
 from net import *
-from tracker import LossTracker
 from checkpointer import Checkpointer
-from scheduler import ComboMultiStepLR
 
 from dlutils import batch_provider
 from dlutils.pytorch.cuda_helper import *
@@ -40,7 +38,8 @@ import sys
 import bimpy
 import lreq
 
-lreq.use_implicit_lreq.set(False)
+
+lreq.use_implicit_lreq.set(True)
 
 im_size = 128
 
@@ -102,7 +101,7 @@ def sample(cfg, logger):
     else:
         model_dict = {
             'generator_s': model.generator,
-            'mapping_s': model.mapping,
+            'mapping_fl_s': model.mapping,
             'dlatent_avg': model.dlatent_avg,
         }
 
@@ -111,10 +110,19 @@ def sample(cfg, logger):
                                 logger=logger,
                                 save=True)
 
-    file_name = 'karras2019stylegan-ffhq'
+    file_name = 'results/karras2019stylegan-ffhq_new'
     # file_name = 'results/model_final'
 
-    checkpointer.load(file_name=file_name + '.pth')
+    checkpointer.load()
+
+    rgbs = []
+    for i in range(model.generator.layer_count):
+        rgbs.append((model.generator.to_rgb[i].to_rgb.weight[:].cpu().detach().numpy(),
+            model.generator.to_rgb[i].to_rgb.bias[:].cpu().detach().numpy()))
+
+    #with open('rgbs.pkl', 'wb') as handle:
+    #    pickle.dump(rgbs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
     # checkpointer.save('final_stripped')
 
     #sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
@@ -131,6 +139,9 @@ def sample(cfg, logger):
     # print(model.discriminator.get_statistics(8))
 
     ctx = bimpy.Context()
+    i = bimpy.Int(8)
+    l = bimpy.Int(3)
+    c = bimpy.Int()
 
     ctx.init(1800, 1600, "Styles")
 
@@ -141,21 +152,28 @@ def sample(cfg, logger):
     def update_image(sample):
         with torch.no_grad():
             model.eval()
-            x_rec = model.generate(model.generator.layer_count - 1, 1, z=sample)
+            x_rec = model.generate(i.value, 1, z=sample)
+            model.generator.set(l.value, c.value)
             resultsample = ((x_rec * 0.5 + 0.5) * 255).type(torch.long).clamp(0, 255)
             resultsample = resultsample.cpu()[0, :, :, :]
 
             return resultsample.type(torch.uint8).transpose(0, 2).transpose(0, 1)
 
-    im = update_image(sample)
-    print(im.shape)
-    im = bimpy.Image(im)
+    with torch.no_grad():
+        im = update_image(sample)
+        save_image(model.generate(i.value, 1, z=sample) * 0.5 + 0.5, 'sample.png')
+        print(im.shape)
+        im = bimpy.Image(im)
 
     while(not ctx.should_close()):
         with ctx:
             im = bimpy.Image(update_image(sample))
-            bimpy.image(im)
             # if bimpy.button('Ok'):
+            bimpy.slider_int('lod', i, 0, 8)
+            bimpy.slider_int('l', l, 0, 8)
+            bimpy.slider_int('c', c, 0, 511)
+            bimpy.slider_int('c', c, 0, 511)
+            bimpy.image(im)
             if bimpy.button('NEXT'):
                 latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
                 sample = torch.tensor(latents).float().cuda() 
@@ -201,10 +219,10 @@ def sample(cfg, logger):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Adversarial, hierarchical style VAE")
+    parser = argparse.ArgumentParser(description="StyleGAN blobless")
     parser.add_argument(
         "--config-file",
-        default="configs/experiment_stylegan.yaml",
+        default="configs/experiment_ffhq.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,

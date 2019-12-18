@@ -16,7 +16,6 @@
 import torch
 from torch import nn
 import random
-import losses
 from net import Generator, Mapping, Discriminator
 import numpy as np
 
@@ -90,27 +89,4 @@ class Model(nn.Module):
         return rec
 
     def forward(self, x, lod, blend_factor, d_train):
-        if d_train:
-            with torch.no_grad():
-                rec = self.generate(lod, blend_factor, count=x.shape[0])
-            self.discriminator.requires_grad_(True)
-            d_result_real = self.discriminator(x, lod, blend_factor).squeeze()
-            d_result_fake = self.discriminator(rec.detach(), lod, blend_factor).squeeze()
-
-            loss_d = losses.discriminator_logistic_simple_gp(d_result_fake, d_result_real, x)
-            return loss_d
-        else:
-            rec = self.generate(lod, blend_factor, count=x.shape[0])
-            self.discriminator.requires_grad_(False)
-            d_result_fake = self.discriminator(rec, lod, blend_factor).squeeze()
-            loss_g = losses.generator_logistic_non_saturating(d_result_fake)
-            return loss_g
-
-    def lerp(self, other, betta):
-        if hasattr(other, 'module'):
-            other = other.module
-        with torch.no_grad():
-            params = list(self.mapping.parameters()) + list(self.generator.parameters()) + list(self.dlatent_avg.parameters())
-            other_param = list(other.mapping.parameters()) + list(other.generator.parameters()) + list(other.dlatent_avg.parameters())
-            for p, p_other in zip(params, other_param):
-                p.data.lerp_(p_other.data, 1.0 - betta)
+        return self.generate(x, lod, blend_factor, d_train)

@@ -1,19 +1,13 @@
-# Style GAN
+# Style GAN without blobs and without retraining
 
-Unofficial Pytorch implementation of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
+This is work of my unofficial Pytorch implementation (https://github.com/podgorskiy/StyleGan) of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
 https://arxiv.org/pdf/1812.04948.pdf
 
-https://arxiv.org/pdf/1710.10196.pdf
+After cloning don't forget to run
 
-Original Tensorflow code:
-
-https://github.com/NVlabs/stylegan
-
-
-Generation example (4 x Titan X for 8 hours):
-<div>
-	<img src='/generation.jpg'>
-</div>
+```shell
+git submodule update --init
+```
 
 To install requirements:
 
@@ -21,13 +15,18 @@ To install requirements:
 pip install -r requirements.txt
 ```
 
-To download and prepare dataset:
+First, you need to download model (karras2019stylegan-ffhq-1024x1024.pkl), or take your pretrainied model and put it in the root
+
+Then, you need to convert tensorflow model to pytorch one:
 ```python
-python prepare_celeba.py
-python downscale_celeba.py
+python convertor.py
 ```
 
-To train:
+After that, you can run:
+
 ```python
-python StyleGAN.py
+python Sample.py
 ```
+
+If you want to run a custom trained model, you might want to adjust /configs/experiment_stylegan.yaml as well as convertor.py
+

@@ -98,7 +98,9 @@ class Checkpointer(object):
             self.logger.info("Loading auxiliary from {}".format(f))
             for name, item in self.auxiliary.items():
                 if name in checkpoint["auxiliary"]:
-                    self.auxiliary[name].load_state_dict(checkpoint["auxiliary"].pop(name))
+                    state = self.auxiliary[name].state_dict()
+                    state.update(checkpoint["auxiliary"].pop(name))
+                    self.auxiliary[name].load_state_dict(state)
                 if "optimizers" in checkpoint and name in checkpoint["optimizers"]:
                     self.auxiliary[name].load_state_dict(checkpoint["optimizers"].pop(name))
                 if name in checkpoint:
