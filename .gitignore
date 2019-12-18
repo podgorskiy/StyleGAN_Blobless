@@ -9,5 +9,3 @@ __pycache__/
 *.eps
 *.txt
 results*/
-
-stylegan/
