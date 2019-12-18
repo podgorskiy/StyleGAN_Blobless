@@ -20,28 +20,9 @@ from torch.nn import functional as F
 from torch.nn import init
 from torch.nn.parameter import Parameter
 import numpy as np
-#from dlutils.pytorch import count_parameters, millify
 import lreq as ln
 import math
 import matplotlib.pyplot as plt
-
-
-if False:
-    def lerp(s, e, x):
-        return s + (e-s) * x
-
-
-    def rsqrt(x):
-        return 1.0 / x ** 0.5
-
-
-    def addcmul(x, value, tensor1, tensor2):
-        return x + value * tensor1 * tensor2
-
-
-    torch.lerp = lerp
-    torch.rsqrt = rsqrt
-    torch.addcmul = addcmul
 
 
 def pixel_norm(x, epsilon=1e-8):
@@ -62,10 +43,6 @@ def upscale2d(x, factor=2):
     return x
 
 
-def downscale2d(x, factor=2):
-    return F.avg_pool2d(x, factor, factor)
-
-
 class Blur(nn.Module):
     def __init__(self, channels):
         super(Blur, self).__init__()
@@ -78,51 +55,6 @@ class Blur(nn.Module):
 
     def forward(self, x):
         return F.conv2d(x, weight=self.weight, groups=self.groups, padding=1)
-
-
-class DiscriminatorBlock(nn.Module):
-    def __init__(self, inputs, outputs, last=False, fused_scale=True):
-        super(DiscriminatorBlock, self).__init__()
-        self.conv_1 = ln.Conv2d(inputs + (1 if last else 0), inputs, 3, 1, 1, bias=False)
-        self.bias_1 = nn.Parameter(torch.Tensor(1, inputs, 1, 1))
-        self.blur = Blur(inputs)
-        self.last = last
-        self.fused_scale = fused_scale
-        if last:
-            self.dense = ln.Linear(inputs * 4 * 4, outputs)
-        else:
-            if fused_scale:
-                self.conv_2 = ln.Conv2d(inputs, outputs, 3, 2, 1, bias=False, transform_kernel=True)
-            else:
-                self.conv_2 = ln.Conv2d(inputs, outputs, 3, 1, 1, bias=False)
-
-        self.bias_2 = nn.Parameter(torch.Tensor(1, outputs, 1, 1))
-
-        with torch.no_grad():
-            self.bias_1.zero_()
-            self.bias_2.zero_()
-
-    def forward(self, x):
-        if self.last:
-            x = minibatch_stddev_layer(x)
-
-        x = self.conv_1(x) + self.bias_1
-        x = F.leaky_relu(x, 0.2)
-
-        if self.last:
-            x = self.dense(x.view(x.shape[0], -1))
-        else:
-            x = self.conv_2(self.blur(x))
-            if not self.fused_scale:
-                x = downscale2d(x)
-            x = x + self.bias_2
-        x = F.leaky_relu(x, 0.2)
-
-        return x
-
-
-def printinf(x):
-    print("MEAN %f\nSTD %f" % (x.mean(), x.std()))
 
 
 class DecodeBlock(nn.Module):
@@ -163,7 +95,39 @@ class DecodeBlock(nn.Module):
     def set(self, c):
         self.c = c
 
-    def forward(self, x, _x, s1, s2):
+    def forward(self, x, s1, s2):
+        if self.has_first_conv:
+            if not self.fused_scale:
+                x = upscale2d(x)
+            x = self.conv_1(x)
+            x = self.blur(x)
+
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1,
+                          tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+
+        x = x + self.bias_1
+
+        x = F.leaky_relu(x, 0.2)
+
+        x = self.instance_norm_1(x)
+
+        x = style_mod(x, self.style_1(s1))
+
+        x = self.conv_2(x)
+
+        x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2,
+                          tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
+
+        x = x + self.bias_2
+
+        x = F.leaky_relu(x, 0.2)
+        x = self.instance_norm_2(x)
+
+        x = style_mod(x, self.style_2(s2))
+
+        return x
+
+    def forward_double(self, x, _x, s1, s2):
         if self.has_first_conv:
             if not self.fused_scale:
                 x = upscale2d(x)
@@ -186,11 +150,7 @@ class DecodeBlock(nn.Module):
 
         x = F.leaky_relu(x, 0.2)
         _x = F.leaky_relu(_x, 0.2)
-        #
-        # if self.c != -1:
-        #     _x[torch.abs(_x) > 10.0] = 0.0
 
-        #x = self.instance_norm_1(x)
 
         std = x.std(axis=[2, 3], keepdim=True)
         mean = x.mean(axis=[2, 3], keepdim=True)
@@ -200,9 +160,6 @@ class DecodeBlock(nn.Module):
 
         x = style_mod(x, self.style_1(s1))
         _x = style_mod(_x, self.style_1(s1))
-
-        # if self.c != -1:
-        #     _x[_x > 300.0] = 0
 
         x = self.conv_2(x)
         _x = self.conv_2(_x)
@@ -215,143 +172,22 @@ class DecodeBlock(nn.Module):
         _x = torch.addcmul(_x, value=1.0, tensor1=self.noise_weight_2,
                           tensor2=n2)
 
-        # if self.c != -1:
-        #     __x = -F.max_pool2d(-torch.abs(_x), 3, 1, padding=1)
-        #     _x[torch.abs(_x - __x) > 200] = 0.0
-
         x = x + self.bias_2
         _x = _x + self.bias_2
 
         x = F.leaky_relu(x, 0.2)
         _x = F.leaky_relu(_x, 0.2)
 
-        #if self.c != -1:
         std = x.std(axis=[2, 3], keepdim=True)
         mean = x.mean(axis=[2, 3], keepdim=True)
 
         x = (x - mean) / std
         _x = (_x - mean) / std
-        #x = self.instance_norm_2(x)
 
         x = style_mod(x, self.style_2(s2))
         _x = style_mod(_x, self.style_2(s2))
 
-        if self.c != -1:
-            _x[x > 200.0] = 0
-            #plt.hist((torch.max(torch.max(_x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
-            #plt.show()
-            #exit()
-
-        #
-        # if self.c != -1:
-        #     _x[torch.abs(_x) > 200.0] = 0.0
-
         return x, _x
-
-    def nforward(self, x, s1, s2):
-        if self.has_first_conv:
-            if not self.fused_scale:
-                x = upscale2d(x)
-            x = self.conv_1(x)
-            x = self.blur(x)
-
-        x = x + self.bias_1
-
-        x = F.leaky_relu(x, 0.2)
-
-        x = self.instance_norm_1(x)
-
-        x = style_mod(x, self.style_1(s1))
-
-        x = self.conv_2(x)
-
-        x = x + self.bias_2
-
-        x = F.leaky_relu(x, 0.2)
-        x = self.instance_norm_2(x)
-
-        x = style_mod(x, self.style_2(s2))
-
-        return x
-
-    def eforward(self, x, d, s1, s2):
-        if self.has_first_conv:
-            if not self.fused_scale:
-                x = upscale2d(x)
-            #d = upscale2d(d)
-            x = self.conv_1(x)
-            #w = torch.abs(torch.det(self.conv_1.weight.view(self.conv_1.weight.shape[0], -1)))
-            #d = d * w
-            #d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), w)) * self.conv_1.std
-            #d = d[..., None, None]
-            # d = self.conv_1(d)
-            x = self.blur(x)
-            #d = self.blur(d)
-
-        # x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_1, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
-        d = torch.sqrt(d*d + 1)
-
-        x = x + self.bias_1
-
-        x = F.leaky_relu(x, 0.2)
-
-        s = math.pow(self.layer + 1, 0.5)
-        print(s)
-        x += s * torch.exp(-x * x / (2.0 * s * s)) / math.sqrt(2 * math.pi) * 0.8
-
-        #xs = x.std(dim=[2, 3], keepdim=True)
-        #d = d / xs
-
-        x = self.instance_norm_1(x)
-
-        x = style_mod(x, self.style_1(s1))
-
-        #s = self.style_1(s1)
-        #s = s.view(s.shape[0], 2, x.shape[1], 1, 1)
-        #d = d * torch.abs(s[:, 0] + 1)
-
-        x = self.conv_2(x)
-        # d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), torch.transpose(self.conv_2.weight.sum(dim=[2, 3]), 0, 1))) * self.conv_2.std
-        #w = torch.abs(torch.det(self.conv_2.weight.view(self.conv_2.weight.shape[0], -1)))
-        #d = torch.abs(torch.matmul(d.view(d.shape[0], d.shape[1]), w)) * self.conv_2.std
-        #d = d[..., None, None]
-        # d = self.conv_2(d)
-        #d = d * w
-        # x = torch.addcmul(x, value=1.0, tensor1=self.noise_weight_2, tensor2=torch.randn([x.shape[0], 1, x.shape[2], x.shape[3]]))
-        d = torch.sqrt(d*d + 1)
-
-        x = x + self.bias_2
-
-        x = F.leaky_relu(x, 0.2)
-
-        s = math.pow(self.layer + 1, 0.5)
-        print(s)
-        x += s * torch.exp(-x * x / (2.0 * s * s)) / math.sqrt(2 * math.pi) * 0.8
-
-        #xs = x.std(dim=[2, 3], keepdim=True)
-        #d = d / xs
-
-        x = self.instance_norm_2(x)
-        
-        x = style_mod(x, self.style_2(s2))
-
-        #s = self.style_1(s1)
-        #s = s.view(s.shape[0], 2, x.shape[1], 1, 1)
-        #d = d * torch.abs(s[:, 0] + 1)
-
-        return x, d
-
-
-class FromRGB(nn.Module):
-    def __init__(self, channels, outputs):
-        super(FromRGB, self).__init__()
-        self.from_rgb = ln.Conv2d(channels, outputs, 1, 1, 0)
-
-    def forward(self, x):
-        x = self.from_rgb(x)
-        x = F.leaky_relu(x, 0.2)
-     
-        return x
 
 
 class ToRGB(nn.Module):
@@ -364,86 +200,6 @@ class ToRGB(nn.Module):
     def forward(self, x):
         x = self.to_rgb(x)
         return x
-
-
-class Discriminator(nn.Module):
-    def __init__(self, startf=32, maxf=256, layer_count=3, channels=3):
-        super(Discriminator, self).__init__()
-        self.maxf = maxf
-        self.startf = startf
-        self.layer_count = layer_count
-        self.from_rgb = nn.ModuleList()
-        self.channels = channels
-
-        mul = 2
-        inputs = startf
-        self.encode_block: nn.ModuleList[DiscriminatorBlock] = nn.ModuleList()
-
-        resolution = 2 ** (self.layer_count + 1)
-
-        for i in range(self.layer_count):
-            outputs = min(self.maxf, startf * mul)
-
-            self.from_rgb.append(FromRGB(channels, inputs))
-
-            fused_scale = resolution >= 128
-
-            block = DiscriminatorBlock(inputs, outputs, i == self.layer_count - 1, fused_scale=fused_scale)
-
-            resolution //= 2
-
-            #print("encode_block%d %s" % ((i + 1), millify(count_parameters(block))))
-            self.encode_block.append(block)
-            inputs = outputs
-            mul *= 2
-
-        self.fc2 = ln.Linear(inputs, 1, gain=1)
-
-    def encode(self, x, lod):
-        x = self.from_rgb[self.layer_count - lod - 1](x)
-        x = F.leaky_relu(x, 0.2)
-
-        for i in range(self.layer_count - lod - 1, self.layer_count):
-            x = self.encode_block[i](x)
-
-        return self.fc2(x)
-
-    def encode2(self, x, lod, blend):
-        x_orig = x
-        x = self.from_rgb[self.layer_count - lod - 1](x)
-        x = F.leaky_relu(x, 0.2)
-        x = self.encode_block[self.layer_count - lod - 1](x)
-
-        x_prev = F.avg_pool2d(x_orig, 2, 2)
-
-        x_prev = self.from_rgb[self.layer_count - (lod - 1) - 1](x_prev)
-        x_prev = F.leaky_relu(x_prev, 0.2)
-
-        x = torch.lerp(x_prev, x, blend)
-
-        for i in range(self.layer_count - (lod - 1) - 1, self.layer_count):
-            x = self.encode_block[i](x)
-
-        return self.fc2(x)
-
-    def forward(self, x, lod, blend):
-        if blend == 1:
-            return self.encode(x, lod)
-        else:
-            return self.encode2(x, lod, blend)
-
-    def get_statistics(self, lod):
-        rgb_std = self.from_rgb[self.layer_count - lod - 1].from_rgb.weight.std().item()
-        rgb_std_c = self.from_rgb[self.layer_count - lod - 1].from_rgb.std
-
-        layers = []
-        for i in range(self.layer_count - lod - 1, self.layer_count):
-            conv_1 = self.encode_block[i].conv_1.weight.std().item()
-            conv_1_c = self.encode_block[i].conv_1.std
-            conv_2 = self.encode_block[i].conv_2.weight.std().item()
-            conv_2_c = self.encode_block[i].conv_2.std
-            layers.append(((conv_1 / conv_1_c), (conv_2 / conv_2_c)))
-        return rgb_std / rgb_std_c, layers
 
 
 class Generator(nn.Module):
@@ -493,114 +249,30 @@ class Generator(nn.Module):
 
         self.to_rgb = to_rgb
 
-    def set(self, l, c):
-        for b in self.decode_block:
-            b.set(-1)
-        self.decode_block[l].set(c)
-
-    def decode_full(self, styles, lod, noise):
+    def decode(self, styles, lod, remove_blob=True):
         x = self.const
-
-        images = []
-
+        _x = None
         for i in range(lod + 1):
-            x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-            im = self.to_rgb[i](x)
-            images.append(im)
-        return images
+            if i < 4 or not remove_blob:
+                x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+                if remove_blob and i == 3:
+                    _x = x.clone()
+                    _x[x > 200.0] = 0
 
-    def edecode(self, styles, lod, noise):
-        x = self.const
-        d = self.zeros
+                # plt.hist((torch.max(torch.max(_x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
+                # plt.show()
+                # exit()
+            else:
+                x, _x = self.decode_block[i].forward_double(x, _x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
 
-        for i in range(lod + 1):
-            x, d = self.decode_block[i].eforward(x, d, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+        if _x is not None:
+            x = _x
 
         x = self.to_rgb[lod](x)
         return x
 
-    def decode(self, styles, lod, noise):
-        x = self.const
-        _x = self.const
-
-        for i in range(lod + 1):
-            setattr(self, "decode_block_%d" % (i + 1), self.decode_block[i])
-
-        for i in range(lod + 1):
-            #x = self.decode_block[i](x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-
-            x, _x = getattr(self, "decode_block_%d" % (i + 1))(x, _x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-
-        x = self.to_rgb[lod](x)
-        _x = self.to_rgb[lod](_x)
-        return _x
-
-    def ndecode(self, styles, lod, noise):
-        x = self.const
-
-        for i in range(lod + 1):
-            x = self.decode_block[i].nforward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-
-        x = self.to_rgb[lod](x)
-        return x
-
-    def decode2(self, styles, lod, blend, noise):
-        x = self.const
-
-        for i in range(lod):
-            x = self.decode_block[i](x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-
-        x_prev = self.to_rgb[lod - 1](x)
-
-        x = self.decode_block[lod](x, styles[:, 2 * lod + 0], styles[:, 2 * lod + 1])
-        x = self.to_rgb[lod](x)
-
-        needed_resolution = self.layer_to_resolution[lod]
-
-        x_prev = F.interpolate(x_prev, size=needed_resolution)
-        x = torch.lerp(x_prev, x, blend)
-
-        return x
-
-    def forward(self, styles, lod, blend):
-        if blend == 1:
-            return self.decode(styles, lod, 1.)
-        else:
-            return self.decode2(styles, lod, blend, 1.)
-
-    def eforward(self, styles, lod, blend):
-        return self.edecode(styles, lod, 1.)
-
-    def nforward(self, styles, lod, blend):
-        return self.ndecode(styles, lod, 1.)
-
-    def get_statistics(self, lod):
-        rgb_std = self.to_rgb[lod].to_rgb.weight.std().item()
-        rgb_std_c = self.to_rgb[lod].to_rgb.std if self.to_rgb[lod].to_rgb.implicit_lreq else 1
-
-        layers = []
-        for i in range(lod + 1):
-            conv_1 = 1.0
-            conv_1_c = 1.0
-            if i != 0:
-                conv_1 = self.decode_block[i].conv_1.weight.std().item()
-                conv_1_c = self.decode_block[i].conv_1.std if self.decode_block[i].conv_1.implicit_lreq else 1
-            conv_2 = self.decode_block[i].conv_2.weight.std().item()
-            conv_2_c = self.decode_block[i].conv_2.std if self.decode_block[i].conv_2.implicit_lreq else 1
-            layers.append(((conv_1 / conv_1_c), (conv_2 / conv_2_c)))
-        return rgb_std / rgb_std_c, layers
-
-
-def minibatch_stddev_layer(x, group_size=4):
-    group_size = min(group_size, x.shape[0])
-    size = x.shape[0]
-    if x.shape[0] % group_size != 0:
-        x = torch.cat([x, x[:(group_size - (x.shape[0] % group_size)) % group_size]])
-    y = x.view(group_size, -1, x.shape[1], x.shape[2], x.shape[3])
-    y = y - y.mean(dim=0, keepdim=True)
-    y = torch.sqrt((y**2).mean(dim=0) + 1e-8).mean(dim=[1, 2, 3], keepdim=True)
-    y = y.repeat(group_size, 1, x.shape[2], x.shape[3])
-    return torch.cat([x, y], dim=1)[:size]
+    def forward(self, styles, lod, remove_blob=True):
+        return self.decode(styles, lod, remove_blob)
 
 
 class MappingBlock(nn.Module):
@@ -624,7 +296,6 @@ class Mapping(nn.Module):
             block = MappingBlock(inputs, outputs, lrmul=0.01)
             inputs = outputs
             setattr(self, "block_%d" % (i + 1), block)
-            #print("dense %d %s" % ((i + 1), millify(count_parameters(block))))
 
     def forward(self, z):
         x = pixel_norm(z)

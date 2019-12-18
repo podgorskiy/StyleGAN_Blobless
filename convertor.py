@@ -83,7 +83,7 @@ def load_from(name, cfg):
     model.generator.const[:] = tensor('G_synthesis/4x4/Const/const')
 
     for i in range(model.generator.layer_count):
-        j = model.discriminator.layer_count - i - 1
+        j = model.generator.layer_count - i - 1
         name = '%dx%d' % (2 ** (2 + i), 2 ** (2 + i))
         block = model.generator.decode_block[i]
 

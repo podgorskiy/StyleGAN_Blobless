@@ -16,7 +16,7 @@
 import torch
 from torch import nn
 import random
-from net import Generator, Mapping, Discriminator
+from net import Generator, Mapping
 import numpy as np
 
 
@@ -46,12 +46,6 @@ class Model(nn.Module):
             latent_size=latent_size,
             channels=channels)
 
-        self.discriminator = Discriminator(
-            startf=startf,
-            layer_count=layer_count,
-            maxf=maxf,
-            channels=channels)
-
         self.dlatent_avg = DLatent(latent_size, self.mapping.num_layers)
         self.latent_size = latent_size
         self.dlatent_avg_beta = dlatent_avg_beta
@@ -59,7 +53,7 @@ class Model(nn.Module):
         self.style_mixing_prob = style_mixing_prob
         self.truncation_cutoff = truncation_cutoff
 
-    def generate(self, lod, blend_factor, z=None, count=32):
+    def generate(self, lod, remove_blob=True, z=None, count=32):
         if z is None:
             z = torch.randn(count, self.latent_size)
         styles = self.mapping(z)
@@ -85,7 +79,7 @@ class Model(nn.Module):
             coefs = torch.where(layer_idx < self.truncation_cutoff, self.truncation_psi * ones, ones)
             styles = torch.lerp(self.dlatent_avg.buff.data, styles, coefs)
 
-        rec = self.generator.forward(styles, lod, blend_factor)
+        rec = self.generator.forward(styles, lod, remove_blob)
         return rec
 
     def forward(self, x, lod, blend_factor, d_train):

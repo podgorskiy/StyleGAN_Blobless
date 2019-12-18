@@ -84,7 +84,6 @@ def sample(cfg, logger):
         truncation_cutoff=cfg.MODEL.TRUNCATIOM_CUTOFF,
         mapping_layers=cfg.MODEL.MAPPING_LAYERS,
         channels=3)
-    del model.discriminator
     model.eval()
 
     #torch.cuda.manual_seed_all(110)
@@ -135,13 +134,10 @@ def sample(cfg, logger):
     #     sample = sample_a * (1.0 - x) + sample_b * x
     #     save_sample(model, sample, i)
 
-    print(model.generator.get_statistics(8))
     # print(model.discriminator.get_statistics(8))
 
     ctx = bimpy.Context()
-    i = bimpy.Int(8)
-    l = bimpy.Int(3)
-    c = bimpy.Int()
+    remove = bimpy.Bool(False)
 
     ctx.init(1800, 1600, "Styles")
 
@@ -152,70 +148,26 @@ def sample(cfg, logger):
     def update_image(sample):
         with torch.no_grad():
             model.eval()
-            x_rec = model.generate(i.value, 1, z=sample)
-            model.generator.set(l.value, c.value)
+            x_rec = model.generate(8, remove.value, z=sample)
+            #model.generator.set(l.value, c.value)
             resultsample = ((x_rec * 0.5 + 0.5) * 255).type(torch.long).clamp(0, 255)
             resultsample = resultsample.cpu()[0, :, :, :]
 
             return resultsample.type(torch.uint8).transpose(0, 2).transpose(0, 1)
 
     with torch.no_grad():
-        im = update_image(sample)
-        save_image(model.generate(i.value, 1, z=sample) * 0.5 + 0.5, 'sample.png')
-        print(im.shape)
-        im = bimpy.Image(im)
+        save_image(model.generate(8, True, z=sample) * 0.5 + 0.5, 'sample.png')
 
+    im = bimpy.Image(update_image(sample))
     while(not ctx.should_close()):
         with ctx:
-            im = bimpy.Image(update_image(sample))
-            # if bimpy.button('Ok'):
-            bimpy.slider_int('lod', i, 0, 8)
-            bimpy.slider_int('l', l, 0, 8)
-            bimpy.slider_int('c', c, 0, 511)
-            bimpy.slider_int('c', c, 0, 511)
+            if bimpy.checkbox('REMOVE BLOB', remove):
+                im = bimpy.Image(update_image(sample))
             bimpy.image(im)
             if bimpy.button('NEXT'):
                 latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
-                sample = torch.tensor(latents).float().cuda() 
-                # im = bimpy.Image(update_image(sample))
-            #bimpy.set_window_font_scale(2.0)
-
-    exit()
-
-    rnd = np.random.RandomState(111011)
-    latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
-    sample = torch.tensor(latents).float().cuda()  # torch.randn(16, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
-    save_sample(model, sample, 0)
-
-    im_count = 16
-    canvas = np.zeros([3, im_size * (im_count + 2), im_size * (im_count + 2)])
-    cut_layer_b = 0
-    cut_layer_e = 2
-
-    styles = model.mapping(sample)
-    styles = list(styles.split(1, 1))
-
-    for i in range(im_count):
-        torch.cuda.manual_seed_all(110)
-        style = [x[i] for x in styles]
-        style = torch.cat(style, dim=0)[None, ...]
-        rec = model.generator.decode(style, cfg.MODEL.LAYER_COUNT - 1, 0.7)
-        place(canvas, rec[0], 1, 2 + i)
-
-        place(canvas, rec[0], 2 + i, 1)
-
-    for i in range(im_count):
-        for j in range(im_count):
-            style_a = [x[i] for x in styles[:cut_layer_b]]
-            style_b = [x[j] for x in styles[cut_layer_b:cut_layer_e]]
-            style_c = [x[i] for x in styles[cut_layer_e:]]
-            style = style_a + style_b + style_c
-            torch.cuda.manual_seed_all(110)
-            style = torch.cat(style, dim=0)[None, ...]
-            rec = model.generator.decode(style, cfg.MODEL.LAYER_COUNT - 1, 0.7)
-            place(canvas, rec[0], 2 + i, 2 + j)
-
-    save_image(torch.Tensor(canvas), 'reconstruction.png')
+                sample = torch.tensor(latents).float().cuda()
+                im = bimpy.Image(update_image(sample))
 
 
 if __name__ == '__main__':
