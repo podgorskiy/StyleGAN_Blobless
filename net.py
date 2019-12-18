@@ -257,7 +257,7 @@ class Generator(nn.Module):
                 x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
                 if remove_blob and i == 3:
                     _x = x.clone()
-                    _x[x > 200.0] = 0
+                    _x[x > 300.0] = 0
 
                 # plt.hist((torch.max(torch.max(_x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
                 # plt.show()
@@ -267,8 +267,14 @@ class Generator(nn.Module):
 
         if _x is not None:
             x = _x
-
-        x = self.to_rgb[lod](x)
+        if lod == 8:
+            x = self.to_rgb[lod](x)
+        else:
+            x = x.max(dim=1, keepdim=True)[0]
+            x = x - x.min()
+            x = x / x.max()
+            x = torch.pow(x, 1.0/2.2)
+            x = x.repeat(1, 3, 1, 1)
         return x
 
     def forward(self, styles, lod, remove_blob=True):

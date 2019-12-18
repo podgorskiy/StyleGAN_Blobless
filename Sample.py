@@ -86,58 +86,25 @@ def sample(cfg, logger):
         channels=3)
     model.eval()
 
-    #torch.cuda.manual_seed_all(110)
-
     logger.info("Trainable parameters generator:")
     count_parameters(model.generator)
 
-    if False:
-        model_dict = {
-            'generator': model.generator,
-            'mapping': model.mapping,
-            'dlatent_avg': model.dlatent_avg,
-        }
-    else:
-        model_dict = {
-            'generator_s': model.generator,
-            'mapping_fl_s': model.mapping,
-            'dlatent_avg': model.dlatent_avg,
-        }
+    model_dict = {
+        'generator_s': model.generator,
+        'mapping_fl_s': model.mapping,
+        'dlatent_avg': model.dlatent_avg,
+    }
 
     checkpointer = Checkpointer(cfg,
                                 model_dict,
                                 logger=logger,
                                 save=True)
 
-    file_name = 'results/karras2019stylegan-ffhq_new'
-    # file_name = 'results/model_final'
-
     checkpointer.load()
-
-    rgbs = []
-    for i in range(model.generator.layer_count):
-        rgbs.append((model.generator.to_rgb[i].to_rgb.weight[:].cpu().detach().numpy(),
-            model.generator.to_rgb[i].to_rgb.bias[:].cpu().detach().numpy()))
-
-    #with open('rgbs.pkl', 'wb') as handle:
-    #    pickle.dump(rgbs, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-    # checkpointer.save('final_stripped')
-
-    #sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
-
-    # for i in range(100):
-    #     if i % 20 == 0:
-    #         sample_a = sample_b
-    #         sample_b = torch.randn(1, cfg.MODEL.LATENT_SPACE_SIZE).view(-1, cfg.MODEL.LATENT_SPACE_SIZE)
-    #     x = (i % 20) / 20.0
-    #     sample = sample_a * (1.0 - x) + sample_b * x
-    #     save_sample(model, sample, i)
-
-    # print(model.discriminator.get_statistics(8))
 
     ctx = bimpy.Context()
     remove = bimpy.Bool(False)
+    layers = bimpy.Int(8)
 
     ctx.init(1800, 1600, "Styles")
 
@@ -147,8 +114,9 @@ def sample(cfg, logger):
 
     def update_image(sample):
         with torch.no_grad():
+            torch.manual_seed(0)
             model.eval()
-            x_rec = model.generate(8, remove.value, z=sample)
+            x_rec = model.generate(layers.value, remove.value, z=sample)
             #model.generator.set(l.value, c.value)
             resultsample = ((x_rec * 0.5 + 0.5) * 255).type(torch.long).clamp(0, 255)
             resultsample = resultsample.cpu()[0, :, :, :]
@@ -161,13 +129,18 @@ def sample(cfg, logger):
     im = bimpy.Image(update_image(sample))
     while(not ctx.should_close()):
         with ctx:
+
+            bimpy.set_window_font_scale(2.0)
+
             if bimpy.checkbox('REMOVE BLOB', remove):
                 im = bimpy.Image(update_image(sample))
-            bimpy.image(im)
             if bimpy.button('NEXT'):
                 latents = rnd.randn(1, cfg.MODEL.LATENT_SPACE_SIZE)
                 sample = torch.tensor(latents).float().cuda()
                 im = bimpy.Image(update_image(sample))
+            if bimpy.slider_int("Layers", layers, 0, 8):
+                im = bimpy.Image(update_image(sample))
+            bimpy.image(im, bimpy.Vec2(1024, 1024))
 
 
 if __name__ == '__main__':
