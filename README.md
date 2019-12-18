@@ -1,4 +1,7 @@
-# Style GAN without blobs and without retraining
+# Original Style GAN without blobs and without retraining
+## Simple trick to remove blobs
+
+![Demo](https://github.com/podgorskiy/StyleGAN_Blobless/raw/master/demo.png)
 
 This is work of my unofficial Pytorch implementation (https://github.com/podgorskiy/StyleGan) of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
 https://arxiv.org/pdf/1812.04948.pdf
@@ -30,3 +33,8 @@ python Sample.py
 
 If you want to run a custom trained model, you might want to adjust /configs/experiment_stylegan.yaml as well as convertor.py
 
+## How it works?
+
+See https://github.com/podgorskiy/StyleGAN_Blobless/blob/master/net.py#L260
+At resolution 64x64 (that is the resolution where the artifact is introduced), all entries of the tensor that are greater than 200 are pruned (assigned 0).
+However, if we do so, we are going to effect statistics of the tensor and therefore will break all consiquent operations. To avoid that, two branches are executed simultaniusly: pruned one and the original one. The original one is used to compute AdaIn, coefficients which are then used to scale the pruned one.
