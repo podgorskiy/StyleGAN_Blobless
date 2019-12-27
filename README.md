@@ -3,7 +3,7 @@
 
 ![Demo](https://github.com/podgorskiy/StyleGAN_Blobless/raw/master/demo.png)
 
-This is work of my unofficial Pytorch implementation (https://github.com/podgorskiy/StyleGan) of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
+This work is based on my unofficial Pytorch implementation (https://github.com/podgorskiy/StyleGan) of Style GAN paper **"A Style-Based Generator Architecture for Generative Adversarial Networks"**
 https://arxiv.org/pdf/1812.04948.pdf
 
 After cloning don't forget to run
@@ -18,9 +18,9 @@ To install requirements:
 pip install -r requirements.txt
 ```
 
-First, you need to download model (karras2019stylegan-ffhq-1024x1024.pkl), or take your pretrainied model and put it in the root
+First, you will need to download model (karras2019stylegan-ffhq-1024x1024.pkl), or take your pretrainied model and put it in the root of the clonned repository.
 
-Then, you need to convert tensorflow model to pytorch one:
+Then, you will need to convert tensorflow model to pytorch one:
 ```python
 python convertor.py
 ```
