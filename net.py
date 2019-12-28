@@ -252,22 +252,30 @@ class Generator(nn.Module):
     def decode(self, styles, lod, remove_blob=True):
         x = self.const
         _x = None
-        for i in range(lod + 1):
-            if i < 4 or not remove_blob:
-                x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
-                if remove_blob and i == 3:
-                    _x = x.clone()
-                    _x[x > 300.0] = 0
+        prune_at_layer = 1
 
-                # plt.hist((torch.max(torch.max(_x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
-                # plt.show()
-                # exit()
+        for i in range(lod + 1):
+            if i <= prune_at_layer or not remove_blob:
+                x = self.decode_block[i].forward(x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
+                if remove_blob and i == prune_at_layer:
+                    _x = x.clone()
+                    ch80 = _x[:, 80]
+                    ch73 = _x[:, 73]
+
+                    ch80[ch80 > torch.max(ch80) * 0.9] = 0
+                    ch73[ch73 > torch.max(ch73) * 0.9] = 0
+
+                    _x[:, 80] = ch80
+                    _x[:, 73] = ch73
+
+                    #plt.hist((torch.max(torch.max(x, dim=2)[0], dim=2)[0]).cpu().flatten().numpy(), bins=300)
+                    #plt.show()
             else:
                 x, _x = self.decode_block[i].forward_double(x, _x, styles[:, 2 * i + 0], styles[:, 2 * i + 1])
 
         if _x is not None:
             x = _x
-        if lod == 8:
+        if lod == 7:
             x = self.to_rgb[lod](x)
         else:
             x = x.max(dim=1, keepdim=True)[0]

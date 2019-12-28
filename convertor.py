@@ -54,7 +54,7 @@ def load_from(name, cfg):
 
     Gs = m[2]
 
-    Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=1024)
+    Gs_ = tflib.Network('G', func_name='stylegan.training.networks_stylegan.G_style', num_channels=3, resolution=512)
 
     Gs_.copy_vars_from(Gs)
 
@@ -149,7 +149,7 @@ def convert(args):
 
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    model, Gs = load_from('karras2019stylegan-ffhq-1024x1024.pkl', cfg)
+    model, Gs = load_from('2019-02-10-stylegan-asuka-networksnapshot-00025-007903.pkl', cfg)
 
     model_dict = {
         'generator_s': model.generator,
@@ -162,7 +162,7 @@ def convert(args):
                                 logger=logger,
                                 save=True)
 
-    checkpointer.save('karras2019stylegan-ffhq')
+    checkpointer.save('karras2019stylegan-asuka')
 
 
 def run():

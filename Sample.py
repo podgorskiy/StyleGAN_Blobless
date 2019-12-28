@@ -104,7 +104,7 @@ def sample(cfg, logger):
 
     ctx = bimpy.Context()
     remove = bimpy.Bool(False)
-    layers = bimpy.Int(8)
+    layers = bimpy.Int(7)
 
     ctx.init(1800, 1600, "Styles")
 
@@ -124,7 +124,8 @@ def sample(cfg, logger):
             return resultsample.type(torch.uint8).transpose(0, 2).transpose(0, 1)
 
     with torch.no_grad():
-        save_image(model.generate(8, True, z=sample) * 0.5 + 0.5, 'sample.png')
+        save_image(model.generate(7, True, z=sample) * 0.5 + 0.5, 'sample_removed.png')
+        save_image(model.generate(7, False, z=sample) * 0.5 + 0.5, 'sample_not_removed.png')
 
     im = bimpy.Image(update_image(sample))
     while(not ctx.should_close()):
